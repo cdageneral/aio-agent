@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------
+   Dark canvas — the AIO landscape is a high-signal place, so the
+   surface gets out of the way and lets the data + accents pop.
+   --------------------------------------------------------------- */
+:root {
+  --bg: #06070b;
+  --surface: #0c0f15;
+  --surface-2: #11151d;
+  --line: rgba(255,255,255,0.07);
+  --line-strong: rgba(255,255,255,0.14);
+  --text: #f4f6fb;
+  --muted: #8a93a6;
+  --dim: #5a6478;
+
+  /* Accent ramp — these encode meaning across the app:
+     blue   = client / acquisition
+     cyan   = market volume
+     lime   = positive growth
+     amber  = footprint / organic
+     pink   = competition / opposition
+     red    = warning / loss
+  */
+  --accent-blue: #4f8cff;
+  --accent-blue-soft: rgba(79,140,255,0.16);
+  --accent-cyan: #25e0ce;
+  --accent-cyan-soft: rgba(37,224,206,0.14);
+  --accent-lime: #b6f53b;
+  --accent-lime-soft: rgba(182,245,59,0.14);
+  --accent-amber: #ffb846;
+  --accent-amber-soft: rgba(255,184,70,0.14);
+  --accent-pink: #ff5d9e;
+  --accent-pink-soft: rgba(255,93,158,0.14);
+  --accent-red: #ff6464;
+  --accent-red-soft: rgba(255,100,100,0.14);
+}
+
+html, body { height: 100%; }
+body {
+  background:
+    radial-gradient(1200px 600px at 80% -10%, rgba(79,140,255,0.10), transparent 60%),
+    radial-gradient(900px 500px at -10% 30%, rgba(37,224,206,0.06), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+
+/* Surfaces */
+.surface  { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; }
+.surface-2 { background: var(--surface-2); border: 1px solid var(--line); border-radius: 14px; }
+
+/* Buttons — explicit declarations, no @apply, so colors always win.
+   The previous version mixed @apply with custom properties and Tailwind's
+   compile order was clobbering the explicit color/background. */
+.btn,
+.btn-primary,
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease, transform 80ms ease;
+}
+.btn         { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+.btn:hover   { background: rgba(255,255,255,0.05); }
+
+.btn-primary { background: var(--accent-lime); color: #06070b; font-weight: 600; border: 1px solid transparent; }
+.btn-primary:hover { background: #c8ff5c; }
+.btn-primary:active { transform: scale(0.98); }
+.btn-primary:disabled { background: rgba(182,245,59,0.18); color: rgba(6,7,11,0.55); cursor: not-allowed; }
+
+.btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line-strong); }
+.btn-ghost:hover { background: rgba(255,255,255,0.05); border-color: rgba(255,255,255,0.22); }
+.btn-ghost:disabled { color: var(--muted); cursor: not-allowed; }
+
+/* Variant used when a Save action has pending edits — pull attention to it. */
+.btn-accent { background: var(--accent-blue); color: #06070b; font-weight: 600; border: 1px solid transparent; padding: 9px 14px; border-radius: 10px; font-size: 14px; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; transition: background-color 120ms ease; }
+.btn-accent:hover { background: #6ea1ff; }
+.btn-accent:disabled { background: rgba(79,140,255,0.25); color: rgba(6,7,11,0.6); cursor: not-allowed; }
+
+/* Inputs */
+.input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.input:hover { border-color: var(--line-strong); }
+.input:focus { border-color: var(--accent-blue); box-shadow: 0 0 0 3px var(--accent-blue-soft); background: var(--surface); }
+.input::placeholder { color: var(--dim); }
+select.input { appearance: none; background-image: linear-gradient(45deg, transparent 50%, #8a93a6 50%), linear-gradient(135deg, #8a93a6 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 12px) 50%; background-size: 6px 6px; background-repeat: no-repeat; padding-right: 30px; }
+
+.label { display: block; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+
+/* Pills / tags */
+.tag { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-size: 11px; font-weight: 500; background: rgba(255,255,255,0.05); color: var(--muted); border: 1px solid var(--line); }
+.tag-accent { background: var(--accent-blue-soft); color: var(--accent-blue); border-color: transparent; }
+.tag-pos { background: var(--accent-lime-soft); color: var(--accent-lime); border-color: transparent; }
+.tag-neg { background: var(--accent-red-soft); color: var(--accent-red); border-color: transparent; }
+
+/* KPI tile — one per metric. Each tile has its own accent edge. */
+.kpi { position: relative; padding: 18px 18px 16px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); overflow: hidden; }
+.kpi::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--accent-blue); opacity: 0.85; }
+.kpi[data-accent="cyan"]::before  { background: var(--accent-cyan); }
+.kpi[data-accent="amber"]::before { background: var(--accent-amber); }
+.kpi[data-accent="lime"]::before  { background: var(--accent-lime); }
+.kpi[data-accent="pink"]::before  { background: var(--accent-pink); }
+.kpi[data-accent="blue"]::before  { background: var(--accent-blue); }
+
+.kpi-label { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 600; line-height: 1.3; }
+.kpi-value { font-size: 28px; font-weight: 600; letter-spacing: -0.01em; margin-top: 8px; line-height: 1; color: var(--text); }
+.kpi-sub   { font-size: 11px; color: var(--dim); margin-top: 6px; }
+.kpi-delta { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; }
+.kpi-delta-pos { background: var(--accent-lime-soft); color: var(--accent-lime); }
+.kpi-delta-neg { background: var(--accent-red-soft); color: var(--accent-red); }
+
+/* Section heading */
+.h2 { font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--text); }
+.muted { color: var(--muted); }
+.dim { color: var(--dim); }
+
+/* Region toggle — explicit, bright defaults so inactive buttons stay readable. */
+.seg-toggle {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.seg-toggle button {
+  padding: 7px 16px;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #d6dbe6;          /* near-white so inactive options are obviously readable */
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+.seg-toggle button:hover { color: var(--text); background: rgba(255,255,255,0.05); }
+.seg-toggle button.is-active {
+  background: var(--accent-blue);
+  color: #06070b;
+  font-weight: 600;
+}
+.seg-toggle button.is-active:hover { background: #6ea1ff; }
+
+/* Period selector */
+.period {
+  display: inline-flex;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.period button {
+  padding: 7px 13px;
+  font-size: 12px;
+  color: #d6dbe6;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+.period button + button { border-left: 1px solid var(--line); }
+.period button:hover { background: rgba(255,255,255,0.05); }
+.period button.is-active {
+  background: rgba(79,140,255,0.20);
+  color: var(--accent-blue);
+  font-weight: 600;
+}

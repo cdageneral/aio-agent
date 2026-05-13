@@ -1,0 +1,7 @@
+aio-coverage-tracker
+version: 1.0.0
+released: 2026-05-12
+codename: chip-of-the-iceberg
+
+This file mirrors `package.json` → `version`. Bump both together.
+See CHANGELOG.md for what's in each release.
