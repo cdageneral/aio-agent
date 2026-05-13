@@ -3,6 +3,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import RegionSelector, { RegionMode, regionsForMode } from "@/components/RegionSelector";
 import { primaryBtnStyle } from "@/components/uiStyles";
+import { fetchJson } from "@/lib/fetch-json";
 
 /**
  * New project wizard, post-taxonomy. Minimal inputs: URL + brand + region.
@@ -22,24 +23,22 @@ export default function NewProjectPage() {
     e.preventDefault();
     setSubmitting(true);
     setErr(null);
-    try {
-      const res = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          client_url: clientUrl,
-          brand_name: brand,
-          brand_aliases: aliases.split(",").map((s) => s.trim()).filter(Boolean),
-          regions: regionsForMode(region),
-        }),
-      });
-      if (!res.ok) throw new Error((await res.json()).error ?? "Failed");
-      const { project } = await res.json();
-      router.push(`/projects/${project.id}`);
-    } catch (e: any) {
-      setErr(e.message);
+    const r = await fetchJson<{ project: { id: string } }>("/api/projects", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        client_url: clientUrl,
+        brand_name: brand,
+        brand_aliases: aliases.split(",").map((s) => s.trim()).filter(Boolean),
+        regions: regionsForMode(region),
+      }),
+    });
+    if (!r.ok || !r.data?.project) {
+      setErr(r.error ?? "Failed to create project");
       setSubmitting(false);
+      return;
     }
+    router.push(`/projects/${r.data.project.id}`);
   }
 
   return (

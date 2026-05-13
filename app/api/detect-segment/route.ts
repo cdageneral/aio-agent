@@ -2,10 +2,8 @@
  * Smart segment detection — POST { url } returns a suggested industry,
  * category, subcategory, region, seed keywords, and competitors.
  *
- * This replaces the legacy taxonomy picker. Free-form output, no enum.
- *
  * Pipeline: fetch URL → strip HTML to ~2KB excerpt → Claude Haiku
- * classifies in structured JSON → return.
+ * classifies in structured JSON → verify suggested domains → return.
  */
 import { NextRequest, NextResponse } from "next/server";
 import { fetchAndExtract } from "@/lib/web-extract";
@@ -31,15 +29,13 @@ export async function POST(req: NextRequest) {
     const extracted = await fetchAndExtract(url);
     if (!extracted.title && !extracted.description && !extracted.text) {
       return NextResponse.json(
-        { error: "couldn't extract any text from this URL — possible JS-only site or block" },
+        { error: "Couldn't extract any text from this URL. The site may be JS-only or blocking bots — try a deeper page like /about or /products." },
         { status: 422 },
       );
     }
     const result = await detectSegment(extracted);
 
-    // Liveness check on the LLM-suggested competitor domains. Anything that
-    // doesn't resolve at all gets dropped so the user never sees a dead row.
-    // Reachable domains get `verified: true` so the UI can render a ✓.
+    // Liveness check on the LLM-suggested competitor domains.
     if (result.competitors.length > 0) {
       const checks = await verifyDomains(result.competitors.map((c) => c.domain));
       const checkByDomain = new Map(checks.map((c) => [c.domain, c]));
@@ -49,7 +45,6 @@ export async function POST(req: NextRequest) {
           if (!v) return { ...c, verified: false };
           return { ...c, verified: v.verified };
         })
-        // Drop hallucinated/dead domains entirely.
         .filter((c) => c.verified);
     }
 
@@ -64,9 +59,27 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (err: any) {
+    console.error("[/api/detect-segment] failed:", err);
     return NextResponse.json(
-      { ok: false, error: err.message ?? "detection failed" },
+      { ok: false, error: friendlyDetectError(err) },
       { status: 500 },
     );
   }
+}
+
+function friendlyDetectError(err: any): string {
+  const msg = String(err?.message ?? err ?? "");
+  if (/ANTHROPIC_API_KEY/i.test(msg)) {
+    return "ANTHROPIC_API_KEY is not set. Add it under Project Settings → Environment Variables and redeploy.";
+  }
+  if (/401/.test(msg) && /anthropic/i.test(msg)) {
+    return "Anthropic API key was rejected. Check the key value in Vercel env vars.";
+  }
+  if (/Could not fetch/i.test(msg)) {
+    return `${msg}. The site may be blocking bots — try without www., try a deeper page, or paste the segment manually via Edit.`;
+  }
+  if (/did not return JSON/i.test(msg) || /Could not parse/i.test(msg)) {
+    return "Claude's response wasn't parseable. Click Detect again — it usually works on the second try.";
+  }
+  return msg || "Unknown detection error. Check the Vercel deployment logs.";
 }

@@ -111,7 +111,7 @@ export default function QuickWinsPanel({
             </select>
           )}
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-            <span style={{ width: 8, height: 8, background: "#b6f53b", borderRadius: 2 }} />score
+            <span style={{ width: 8, height: 8, background: "#b6f53b", borderRadius: 2 }} />priority score
           </span>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
             <span style={{ width: 8, height: 8, background: "rgba(255,255,255,0.10)", borderRadius: 2 }} />remaining
@@ -184,8 +184,8 @@ export default function QuickWinsPanel({
               </div>
 
               <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 10, color: "#5a6478", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>score</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: "#b6f53b", lineHeight: 1, fontVariantNumeric: "tabular-nums" }}>{w.score}</div>
+                <div style={{ fontSize: 10, color: "#5a6478", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>priority<br/>score</div>
+                <div style={{ fontSize: 22, fontWeight: 700, color: "#b6f53b", lineHeight: 1, fontVariantNumeric: "tabular-nums", marginTop: 2 }}>{w.score}</div>
                 <div style={{ fontSize: 10, color: "#8a93a6", marginTop: 2 }}>{w.citation_count} slots open</div>
               </div>
             </div>

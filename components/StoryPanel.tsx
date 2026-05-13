@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef, useState } from "react";
 import { RegionMode } from "./RegionSelector";
 
 /**
@@ -145,21 +146,71 @@ export default function StoryPanel({
         </p>
       )}
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-6">
-        <Pulse label="AIO penetration" value={fmtPct(triggerPct)} sub={`of ${latest.total_keywords.toLocaleString()} queries`} accent="cyan" />
-        <Pulse label={`${project.brand_name} acquired`} value={String(client?.aios_acquired ?? 0)} sub={fmtPct(client?.citation_rate ?? 0) + " citation rate"} accent="blue" />
-        <Pulse label={`vs ${leader?.brand_name ?? "leader"}`} value={fmtPct(leader?.citation_rate ?? 0)} sub={leader?.brand_name === project.brand_name ? "you" : "leads the field"} accent="pink" />
-        {latest.volume ? (
-          <Pulse
-            label="AIO market size"
-            value={fmtPct(latest.volume.aio_volume_share)}
-            sub={`${(latest.volume.aio_volume / 1000).toFixed(1)}k / ${(latest.volume.total_volume / 1000).toFixed(1)}k searches`}
-            accent="amber"
-          />
-        ) : (
-          <Pulse label="Non-brand share" value={fmtPct(nonBrandShare)} sub="Wikipedia + Reddit" accent="amber" />
-        )}
-      </div>
+      {/* Pulse cards — share the same "X of Y" framing so the math is obvious.
+          Card 1: AIO penetration (queries with AIO / total queries).
+          Card 2: Citation share — % of queries where the client is cited.
+          Card 3: Top brand — leader's citation share, with the leader's name in the label.
+          Card 4: Others — non-tracked source share, click to jump to full list. */}
+      {(() => {
+        const totalKw = latest.total_keywords || 0;
+        const clientShare = totalKw ? (client?.aios_acquired ?? 0) / totalKw : 0;
+        // Brand-mention share = AIOs where the brand's name appears in the AIO answer text,
+        // divided by total queries. Same denominator as the other cards for a consistent X/Y framing.
+        const mentionCount = client?.mention_count ?? 0;
+        const mentionShare = totalKw ? mentionCount / totalKw : 0;
+        const topBrand = ranked[0];
+        const topBrandShare = totalKw && topBrand ? topBrand.aios_acquired / totalKw : 0;
+        // "Others" = every citation slot going to a non-tracked source (Wikipedia, Reddit, news, industry-but-untracked, etc.)
+        const totalSlots = latest.total_citation_slots ?? 0;
+        const otherSlots = (latest.share_of_voice ?? [])
+          .filter((s: any) => s.kind === "bucket")
+          .reduce((acc: number, s: any) => acc + (s.slots ?? 0), 0);
+        const othersShare = totalSlots ? otherSlots / totalSlots : 0;
+        return (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mt-6">
+            <Pulse
+              label="AIO penetration"
+              value={fmtPct(triggerPct)}
+              sub={`${latest.total_aios_triggered.toLocaleString()} of ${totalKw.toLocaleString()} queries`}
+              accent="cyan"
+              explanation="The percentage of your tracked queries where Google is showing an AI Overview. High penetration means AIOs have already reshaped this SERP — traditional organic clicks are being substituted for Google's AIO summary. When this number is high, AIO citation strategy isn't optional."
+            />
+            <Pulse
+              label="Brand mentions"
+              value={fmtPct(mentionShare)}
+              sub={`${mentionCount} of ${totalKw.toLocaleString()} brand mentions`}
+              accent="lime"
+              explanation="AIOs where your brand name appears in the answer text, with or without a citation link. A softer signal than Citation Share — Google is talking about you even if you didn't earn the clickable source slot. The gap between this and Citation Share tells you whether to focus on content quality (convert mentions to citations) or topical authority (get into the answer text in the first place)."
+            />
+            <Pulse
+              label="Citation share"
+              value={fmtPct(clientShare)}
+              sub={`${client?.aios_acquired ?? 0} of ${totalKw.toLocaleString()} citations`}
+              accent="blue"
+              explanation="The percentage of your tracked queries where your domain was cited as a source inside the AI Overview. This is the headline performance metric — how often you appear when an AIO triggers and earn the click. Most brands land in the 5–25% range. Above 50% is exceptional and means you're dominating your category."
+            />
+            <Pulse
+              label={`Top brand · ${topBrand?.brand_name ?? "—"}`}
+              value={fmtPct(topBrandShare)}
+              sub={topBrand?.kind === "client" ? "you lead" : "leads the field"}
+              accent="pink"
+              explanation="The brand with the highest citation share across this snapshot's AIOs. When you ARE the top brand, this card matches your Citation Share. When a competitor is on top, this card shows their share and the gap between you and them is how far behind you are. Look at this card and Citation Share side-by-side to see your competitive position at a glance."
+            />
+            <Pulse
+              label="Others"
+              value={fmtPct(othersShare)}
+              sub="view all →"
+              accent="amber"
+              onClick={() => {
+                if (typeof document !== "undefined") {
+                  document.getElementById("section-other-domains")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }
+              }}
+              explanation="The percentage of AIO citation slots going to sources NOT in your tracked set — Wikipedia, Reddit, news sites, industry sites you haven't added as competitors. High 'Others' means lots of zero-click attention is being captured by sources you might want to add as competitors. Click the card to scroll to the full domain list."
+            />
+          </div>
+        );
+      })()}
 
       {latest.volume && (
         <div style={{ marginTop: 12, padding: "10px 14px", borderRadius: 10, background: "rgba(255,184,70,0.08)", border: "1px solid rgba(255,184,70,0.22)", fontSize: 12.5 }}>
@@ -172,16 +223,127 @@ export default function StoryPanel({
           <span className="muted"> Volume known on {fmtPct(latest.volume.coverage)} of the universe.</span>
         </div>
       )}
+
     </div>
   );
 }
 
-function Pulse({ label, value, sub, accent }: { label: string; value: string; sub: string; accent: "blue" | "cyan" | "pink" | "amber" | "lime" }) {
+function Pulse({
+  label, value, sub, accent, onClick, explanation,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  accent: "blue" | "cyan" | "pink" | "amber" | "lime";
+  /** When set, the card becomes a button (cursor:pointer, hover state). */
+  onClick?: () => void;
+  /** When set, an (i) icon appears top-right. Click toggles a popover with this text. */
+  explanation?: string;
+}) {
   const accentVar = `var(--accent-${accent})`;
   const accentSoft = `var(--accent-${accent}-soft)`;
+  const clickable = !!onClick;
+  const [infoOpen, setInfoOpen] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  // Close the info popover on outside click / Escape — but only while it's open.
+  useEffect(() => {
+    if (!infoOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (cardRef.current && !cardRef.current.contains(e.target as Node)) setInfoOpen(false);
+    }
+    function onKey(e: KeyboardEvent) { if (e.key === "Escape") setInfoOpen(false); }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [infoOpen]);
+
   return (
-    <div className="rounded-xl p-3" style={{ background: accentSoft, border: `1px solid ${accentVar}33` }}>
-      <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: accentVar }}>{label}</div>
+    <div
+      ref={cardRef}
+      onClick={onClick}
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+      className="rounded-xl p-3"
+      style={{
+        position: "relative",
+        background: accentSoft,
+        border: `1px solid ${accentVar}33`,
+        cursor: clickable ? "pointer" : "default",
+        transition: "border-color 120ms ease, transform 80ms ease",
+      }}
+      onMouseEnter={clickable ? (e) => { (e.currentTarget as HTMLDivElement).style.borderColor = `${accentVar}99`; } : undefined}
+      onMouseLeave={clickable ? (e) => { (e.currentTarget as HTMLDivElement).style.borderColor = `${accentVar}33`; } : undefined}
+    >
+      {explanation && (
+        <>
+          <button
+            onClick={(e) => { e.stopPropagation(); setInfoOpen((v) => !v); }}
+            aria-label={`About ${label}`}
+            title={`About ${label}`}
+            style={{
+              position: "absolute",
+              top: 7,
+              right: 7,
+              width: 18,
+              height: 18,
+              borderRadius: "50%",
+              background: infoOpen ? `${accentVar}` : "transparent",
+              color: infoOpen ? "#06070b" : accentVar,
+              border: `1px solid ${accentVar}66`,
+              cursor: "pointer",
+              fontSize: 11,
+              lineHeight: 1,
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 0,
+              opacity: 0.85,
+              transition: "background 120ms ease, color 120ms ease, opacity 120ms ease",
+              fontFamily: "Georgia, serif",
+              fontStyle: "italic",
+              fontWeight: 600,
+            }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = "0.85"; }}
+          >
+            i
+          </button>
+          {infoOpen && (
+            <div
+              role="tooltip"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                position: "absolute",
+                top: 32,
+                right: -2,
+                width: 280,
+                zIndex: 50,
+                padding: "10px 12px",
+                borderRadius: 10,
+                background: "#11151d",
+                border: `1px solid ${accentVar}55`,
+                boxShadow: "0 8px 20px rgba(0,0,0,0.50)",
+                fontSize: 12.5,
+                lineHeight: 1.55,
+                color: "#d6dbe6",
+                fontWeight: 400,
+                textAlign: "left",
+                textTransform: "none",
+                letterSpacing: "normal",
+              }}
+            >
+              <div style={{ fontSize: 10, color: accentVar, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", marginBottom: 5 }}>{label}</div>
+              {explanation}
+            </div>
+          )}
+        </>
+      )}
+      <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: accentVar, paddingRight: explanation ? 22 : 0 }}>{label}</div>
       <div className="text-2xl font-semibold mt-1" style={{ color: "var(--text)" }}>{value}</div>
       <div className="text-[11px] muted mt-1">{sub}</div>
     </div>

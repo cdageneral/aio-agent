@@ -61,7 +61,7 @@ export default function FirstRefreshBanner({
             {regionCount > 1 && <> across {regionCount} regions</>}
           </h3>
           <p style={{ fontSize: 13, color: "#d6dbe6", margin: "6px 0 0", lineHeight: 1.55 }}>
-            We'll fire one SerpAPI query per keyword × region, parse the AIO from each SERP, and store everything as your first snapshot. Once it lands, the dashboard fills in — KPIs, share-of-voice, quick wins, the works.
+            We'll fire one SerpAPI query per keyword × region, parse the AIO from each SERP, and store everything as your first snapshot. Once it lands, the dashboard fills in — KPIs, share-of-voice, AIO Opportunities, the works.
           </p>
 
           <div style={{ display: "flex", gap: 18, marginTop: 12, flexWrap: "wrap", fontSize: 12 }}>

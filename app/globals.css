@@ -182,3 +182,6 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
   color: var(--accent-blue);
   font-weight: 600;
 }
+
+/* Spin animation used by the export buttons' loading icon. */
+@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }

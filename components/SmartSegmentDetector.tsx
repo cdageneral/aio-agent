@@ -62,12 +62,26 @@ export default function SmartSegmentDetector({
   const [excerpt, setExcerpt] = useState<{ title: string; description: string; h1: string } | null>(null);
   const [editing, setEditing] = useState(false);
 
-  // Free-text edit buffer mirrors `value` until Save.
+  // Free-text edit buffer mirrors `value` until Save. We re-seed these from
+  // the latest `value` whenever the user clicks the top-level Edit button so
+  // that opening the edit panel after a successful Use-these (or after a fresh
+  // page load) doesn't show empty fields and accidentally wipe them on Save.
   const [editL1, setEditL1] = useState(value.l1 ?? "");
   const [editL2, setEditL2] = useState(value.l2 ?? "");
   const [editL3, setEditL3] = useState(value.l3 ?? "");
   const [editProduct, setEditProduct] = useState(value.primary_product ?? "");
   const [editSeeds, setEditSeeds] = useState((value.seed_keywords ?? []).join(", "));
+
+  /** Pre-fill the edit form from the currently-saved value. Called by the
+   *  top-level Edit button so the user isn't editing a phantom blank form. */
+  function openEditFromValue() {
+    setEditL1(value.l1 ?? "");
+    setEditL2(value.l2 ?? "");
+    setEditL3(value.l3 ?? "");
+    setEditProduct(value.primary_product ?? "");
+    setEditSeeds((value.seed_keywords ?? []).join(", "));
+    setEditing(true);
+  }
 
   async function detect() {
     if (!clientUrl) {
@@ -173,7 +187,7 @@ export default function SmartSegmentDetector({
         </div>
         <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
           {hasSegment && !editing && (
-            <button style={ghostBtnStyle()} onClick={() => setEditing(true)}>
+            <button style={ghostBtnStyle()} onClick={openEditFromValue}>
               <i className="ti ti-edit" style={{ fontSize: 14 }} aria-hidden="true"></i>Edit
             </button>
           )}

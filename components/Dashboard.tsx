@@ -3,7 +3,6 @@ import { useCallback, useEffect, useState } from "react";
 import ProjectHeader from "./ProjectHeader";
 import CompetitorPanel from "./CompetitorPanel";
 import KeywordPanel from "./KeywordPanel";
-import KpiCards from "./KpiCards";
 import GrowthChart from "./GrowthChart";
 import AcquisitionChart from "./AcquisitionChart";
 import PeriodSelector from "./PeriodSelector";
@@ -19,6 +18,7 @@ import KeywordClusters from "./KeywordClusters";
 import QuickWinsPanel from "./QuickWinsPanel";
 import WhatChangedPanel from "./WhatChangedPanel";
 import OtherDomainsTabs from "./OtherDomainsTabs";
+import InfoTooltip from "./InfoTooltip";
 
 export interface MetricsPayload {
   project: any;
@@ -49,7 +49,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   // CompetitorPanel. Transient — survives in-session, cleared once added or
   // dismissed. Re-detect to repopulate.
   const [suggestedCompetitors, setSuggestedCompetitors] = useState<SuggestedCompetitor[]>([]);
-  // Cluster filter is shared across the Cluster cards, Quick Wins, and Keyword
+  // Cluster filter is shared across the Cluster cards, AIO Opportunities, and Keyword
   // Drilldown panels. Clicking a card sets it; the dropdowns in the lower
   // panels read it. "all" disables filtering.
   const [clusterFilter, setClusterFilter] = useState<string>("all");
@@ -204,8 +204,6 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <KeywordPanel projectId={projectId} onChanged={load} />
       </section>
 
-      <KpiCards latest={latest} growth={growth} project={project} />
-
       <section className="surface p-5">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="h2">What changed</h2>
@@ -240,7 +238,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
           <div>
             <h2 className="h2">Topic clusters</h2>
-            <p className="text-xs muted mt-0.5">Keywords grouped by intent. Click any cluster to filter Quick Wins &amp; Drilldown to that topic.</p>
+            <p className="text-xs muted mt-0.5">Keywords grouped by intent. Click any cluster to filter AIO Opportunities &amp; Drilldown to that topic.</p>
           </div>
           {latest?.clusters?.length > 0 && (
             <span className="text-xs muted">{latest.clusters.length} cluster{latest.clusters.length === 1 ? "" : "s"}</span>
@@ -268,7 +266,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
             <i className="ti ti-filter" style={{ fontSize: 14, color: "#a878ff" }} aria-hidden="true"></i>
             <span style={{ color: "#8a93a6" }}>Filtering to cluster</span>
             <strong style={{ color: "#a878ff" }}>{clusterFilter}</strong>
-            <span style={{ color: "#5a6478" }}>· Quick Wins &amp; Drilldown below are filtered</span>
+            <span style={{ color: "#5a6478" }}>· AIO Opportunities &amp; Drilldown below are filtered</span>
           </div>
           <button
             onClick={() => setClusterFilter("all")}
@@ -288,8 +286,33 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       <section className="surface p-5" id="section-quick-wins">
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
           <div>
-            <h2 className="h2">Quick wins</h2>
-            <p className="text-xs muted mt-0.5">Gettable AIO citations ranked by opportunity score — start here.</p>
+            <h2 className="h2" style={{ display: "inline-flex", alignItems: "center" }}>
+              AIO Opportunities
+              <InfoTooltip
+                label="AIO Opportunities"
+                accent="#b6f53b"
+                body={
+                  <div>
+                    <p style={{ margin: "0 0 8px" }}>
+                      Keywords where Google is showing an AI Overview today but your client is <strong style={{ color: "#f4f6fb" }}>not</strong> cited. The gap you can attack.
+                    </p>
+                    <div style={{ fontSize: 10, color: "#b6f53b", fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", margin: "10px 0 4px" }}>Priority Score formula</div>
+                    <ul style={{ margin: 0, padding: 0, listStyle: "none", fontSize: 12, lineHeight: 1.6 }}>
+                      <li><strong style={{ color: "#f4f6fb" }}>+50</strong> base — AIO triggered, client uncited (the gap itself)</li>
+                      <li><strong style={{ color: "#f4f6fb" }}>+30</strong> client already ranks organic for this keyword</li>
+                      <li><strong style={{ color: "#f4f6fb" }}>+20</strong> a tracked brand ranks for it (territory is owned)</li>
+                      <li><strong style={{ color: "#f4f6fb" }}>+15</strong> a tracked competitor is cited (winnability proof)</li>
+                      <li><strong style={{ color: "#f4f6fb" }}>+10</strong> client mentioned in AIO text but not linked</li>
+                      <li><strong style={{ color: "#f4f6fb" }}>+5</strong> AIO has 4+ citation slots (more shots on goal)</li>
+                    </ul>
+                    <p style={{ margin: "10px 0 0", color: "#8a93a6" }}>
+                      Higher score = more winnable. The chips in the <strong style={{ color: "#f4f6fb" }}>Why</strong> column show which bonuses applied — the score is never a black box.
+                    </p>
+                  </div>
+                }
+              />
+            </h2>
+            <p className="text-xs muted mt-0.5">Gettable AIO citations ranked by priority score — start here.</p>
           </div>
         </div>
         <QuickWinsPanel
@@ -320,7 +343,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <CompetitorTable latest={latest} />
       </section>
 
-      <section className="surface p-5">
+      <section className="surface p-5" id="section-other-domains">
         <h2 className="h2 mb-3">Other domains in AIOs</h2>
         <OtherDomainsTabs latest={latest} />
       </section>

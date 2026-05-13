@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { RegionMode, regionsForMode } from "./RegionSelector";
+import { exportDrilldownToCsv, exportDrilldownToPdf, type DrilldownExportRow, type ExportContext } from "@/lib/export";
 
 /**
  * Per-keyword drilldown table. Each row shows quick stance (AIO yes/no, who won,
@@ -68,6 +69,7 @@ export default function KeywordExplorer({
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterMode>("aio");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [exporting, setExporting] = useState<null | "csv" | "pdf">(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -129,6 +131,64 @@ export default function KeywordExplorer({
     });
   }
 
+  // Map the currently-filtered rows into the flat shape the exporter expects.
+  // This re-derives whenever filters change, so a download always reflects
+  // what the user is actually looking at.
+  const exportRows = useMemo<DrilldownExportRow[]>(() => {
+    return rows.map((k) => {
+      const clientHit = k.brand_hits.find((b) => b.kind === "client");
+      let status = "no AIO";
+      if (k.has_aio) {
+        if (clientHit?.cited) status = `cited #${clientHit.position}`;
+        else if (clientHit?.mentioned) status = "mentioned (not cited)";
+        else status = "missing";
+      }
+      return {
+        keyword: k.keyword,
+        country: k.country,
+        cluster: k.cluster_label,
+        has_aio: k.has_aio,
+        citations_count: k.citations.length,
+        top_winner: k.winner?.brand_name ?? null,
+        top_winner_position: k.winner?.position ?? null,
+        client_status: status,
+      };
+    });
+  }, [rows]);
+
+  const exportCtx = useMemo<ExportContext>(() => {
+    const filterLabel =
+      filter === "all" ? "all keywords" :
+      filter === "aio" ? "AIOs only" :
+      filter === "won" ? "won" :
+      filter === "missing" ? "missing" :
+      "mention only";
+    const regionLabel = region === "us" ? "US" : region === "ca" ? "Canada" : "US + Canada";
+    const clusterLabel =
+      clusterFilter === "all" ? "all clusters" :
+      clusterFilter === "__unclustered" ? "unclustered" :
+      clusterFilter;
+    return { brand_name: projectBrand, filter_label: filterLabel, region_label: regionLabel, cluster_label: clusterLabel };
+  }, [filter, region, clusterFilter, projectBrand]);
+
+  async function handleExport(kind: "csv" | "pdf") {
+    if (exportRows.length === 0) return;
+    setExporting(kind);
+    try {
+      if (kind === "csv") {
+        exportDrilldownToCsv(exportRows, exportCtx);
+      } else {
+        await exportDrilldownToPdf(exportRows, exportCtx);
+      }
+    } catch (e) {
+      console.error("Export failed", e);
+      // eslint-disable-next-line no-alert
+      alert("Export failed. Check the console for details.");
+    } finally {
+      setExporting(null);
+    }
+  }
+
   if (loading) return <div className="text-sm muted">Loading keyword detail…</div>;
   if (!data || data.keywords.length === 0) {
     return <div className="text-sm muted">No keyword data yet. Run a refresh first.</div>;
@@ -173,6 +233,27 @@ export default function KeywordExplorer({
           onChange={(e) => setSearch(e.target.value)}
           style={{ maxWidth: 220, marginLeft: "auto" }}
         />
+
+        <div style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+          <ExportButton
+            label="Excel"
+            icon="ti-file-spreadsheet"
+            disabled={exportRows.length === 0 || exporting !== null}
+            loading={exporting === "csv"}
+            onClick={() => handleExport("csv")}
+            accent="#84cc16"
+            title={`Download ${exportRows.length} row${exportRows.length === 1 ? "" : "s"} as a CSV (opens in Excel / Google Sheets)`}
+          />
+          <ExportButton
+            label="PDF"
+            icon="ti-file-text"
+            disabled={exportRows.length === 0 || exporting !== null}
+            loading={exporting === "pdf"}
+            onClick={() => handleExport("pdf")}
+            accent="#ff6464"
+            title={`Download ${exportRows.length} row${exportRows.length === 1 ? "" : "s"} as a printable PDF report`}
+          />
+        </div>
       </div>
 
       <div style={{ borderRadius: 12, border: "1px solid rgba(255,255,255,0.07)", overflow: "hidden" }}>
@@ -267,6 +348,46 @@ export default function KeywordExplorer({
         })}
       </div>
     </div>
+  );
+}
+
+function ExportButton({
+  label, icon, disabled, loading, onClick, accent, title,
+}: {
+  label: string;
+  icon: string;
+  disabled: boolean;
+  loading: boolean;
+  onClick: () => void;
+  accent: string;
+  title: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "6px 11px",
+        borderRadius: 8,
+        fontSize: 12,
+        fontWeight: 600,
+        background: "transparent",
+        color: disabled ? "#5a6478" : accent,
+        border: `1px solid ${disabled ? "rgba(255,255,255,0.07)" : accent + "55"}`,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled && !loading ? 0.55 : 1,
+        transition: "background 120ms ease, border-color 120ms ease",
+      }}
+      onMouseEnter={(e) => { if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = `${accent}12`; }}
+      onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+    >
+      <i className={`ti ${loading ? "ti-loader-2" : icon}`} style={{ fontSize: 13, animation: loading ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
+      <span>{loading ? "Preparing…" : label}</span>
+    </button>
   );
 }
 

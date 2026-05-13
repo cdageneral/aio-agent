@@ -140,7 +140,7 @@ function ClusterCard({
       {clickable && !active && (
         <div style={{ fontSize: 10, color: "#5a6478", marginTop: 6, display: "inline-flex", alignItems: "center", gap: 3 }}>
           <i className="ti ti-cursor-arrow" style={{ fontSize: 11 }} aria-hidden="true"></i>
-          Click to filter Quick Wins &amp; Drilldown
+          Click to filter AIO Opportunities &amp; Drilldown
         </div>
       )}
       {active && (
