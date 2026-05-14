@@ -4,6 +4,107 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.3] — 2026-05-13
+
+Add an "Acquisition · {client}" pulse card so the client's number reads side-by-side against "Top brand · {leader}."
+
+### Added
+- **Acquisition · {client.brand_name}** card (blue accent) at position 1 of row 2. Uses the same denominator and formula as Top Brand (`aios_acquired / total_keywords`), formatted identically so the two numbers are directly comparable. Sub-text says "you lead the field" when the client is #1, otherwise shows ranked position like "you're 3rd of 8."
+- Row 2 grid expanded from 4 → 5 cards with responsive breakpoints: `grid-cols-2 md:grid-cols-3 lg:grid-cols-5`.
+
+### Changed
+- Citation Share's tooltip rewritten to clarify it shows the **same number** as the new Acquisition card — Citation Share is the generic/template framing of the metric, Acquisition is the personalized framing. Useful in different contexts (template reports vs. executive read).
+- Top Brand and Brand Mentions tooltips now reference "the Acquisition card" instead of "Citation Share" where they were establishing the read-across pattern.
+
+### Notes
+- Pure presentation. The metric was already in the payload; we're just surfacing it twice with different framings so an executive scanning the dashboard sees their own brand named explicitly next to the leader's name.
+- Why two cards with the same number: the visual paired read of "Acquisition · CITI 4.5% / Top brand · CHASE 54.5%" is instantly readable; the generic "Citation share 4.5%" remains for template/report contexts where you don't want to hard-name the client.
+
+## [1.1.2] — 2026-05-13
+
+Split the Story pulse strip into two visual rows so SERP-level metrics sit above client-placement metrics.
+
+### Added
+- **Top row · SERP saturation (2 elevated cards):**
+  - **Available AIOs** *(new card)* — the raw count of AI Overviews currently surfacing across your tracked queries (e.g. "423"). The absolute size of the AIO battleground.
+  - **AIO Penetration in SERP** *(renamed from "AIO penetration")* — the percentage of tracked queries with an AIO present. How saturated the SERP is.
+  - Both cards use cyan accent, larger value font, more padding, and a subtle accent-tinted shadow so they read as a clear "headline tier" above the placement row.
+- **`emphasis` prop on `<Pulse>`** — opt-in flag that scales the value font from 24px → 36px, bumps padding, strengthens the border, and adds a soft accent-colored shadow ring. Reusable for any future card we want to elevate.
+
+### Changed
+- **Bottom row · client placement (4 normal-size cards):** Brand Mentions · Citation Share · Top Brand · X · Others. Same metrics as before, but now framed as "given AIOs are happening, here's where you sit."
+- Tooltip on the Available AIOs card explains it's the absolute count and how to read it. Tooltip on AIO Penetration in SERP rewritten to emphasize the SERP-saturation framing.
+
+### Notes
+- Pure presentation. No schema, no API, no metric definition changes — `latest.total_aios_triggered` was already in the payload, we're just rendering it as its own card now.
+- The visual hierarchy makes the read-order obvious: "is this a market with AIOs?" → "given it is, where do you stand?"
+
+## [1.1.1] — 2026-05-13
+
+Reorder the Keyword Universe panel so the input is at the top.
+
+### Changed
+- **Tabs + textarea + upload buttons now sit directly below the panel header**, so the most common action (paste keywords, click Add, or upload a CSV) is visible without scrolling past anything else.
+- **Topic clustering card moved below the input surfaces.** Clustering is an analytical step that only makes sense once keywords exist, so it now sits where it belongs in the workflow order: enter keywords → cluster them → review the clusters.
+
+### Notes
+- Pure reorder, no logic changes. Same component, same endpoints, same data — just a more sensible top-to-bottom reading order.
+
+## [1.1.0] — 2026-05-13
+
+Two-step new-project wizard with detection up front and auto-add competitors. This is the big onboarding refactor: by the time you land on the dashboard, segment, competitors, and seed keywords are all in place — your first refresh covers everything in **one** SerpAPI pass instead of two.
+
+### Added
+- **Two-step wizard** at `/projects/new` with a visible step indicator:
+  - **Step 1 — Brand basics:** client URL + brand + aliases + region (the existing form, now sized for a single-purpose page).
+  - **Detecting state:** spinner while Claude reads the URL.
+  - **Step 2 — Review & confirm:** detected segment with confidence chip, region hint badge, suggested competitors (checkbox list, all checked by default, with verified badges), seed keywords (chip list with per-chip remove), region override, and Back / Create.
+- **Auto-add checked competitors** — when you click "Create project," the project is created and every checked competitor is added as a tracked brand in one flow. No more "Use these" → switch to dashboard → click Add on each row.
+- **Select all / Select none** buttons for the competitor list when there are more than 1.
+- **Per-chip remove** on the seed keyword list — trim what Claude proposed before it hits your keyword universe.
+- **Region auto-suggestion** — if the detector returns a region hint and you haven't changed the default (US), the wizard switches to the suggested region quietly. You can override again on Step 2.
+
+### Changed
+- The dashboard's CompetitorPanel "From smart detection" suggestion strip is still there — it's still the path for re-detecting mid-project — but the primary onboarding flow no longer relies on it.
+
+### Fixed
+- The brittle "detect on dashboard → click Use these → suggestions sit in a separate strip → click Add per row" path that was easy to abandon midway. New projects now have competitors set up before the dashboard ever loads.
+
+### Backend
+- No new endpoints, no schema changes. The wizard uses the existing `/api/detect-segment` (no project needed), `/api/projects` POST (which already accepts segment fields + seed keywords), and `/api/projects/{id}/competitors` POST.
+- Skip-detection fallback: if you click "Skip detection" on Step 1 or detection fails, the project still gets created with just the brand basics — the dashboard's existing Detect button can re-run detection later.
+
+### Notes
+- Existing projects are unaffected. The redesign only changes the new-project flow.
+- Why this matters cost-wise: SerpAPI charges per (keyword × region) query, and a refresh has to capture citations for **every** tracked brand to compute share of voice. Adding a competitor after the first refresh means re-running the whole batch to include them. Adding them before the first refresh means one batch covers everyone.
+
+## [1.0.9] — 2026-05-13
+
+Generic placeholders on the new-project form — no more hardcoded CHIP examples.
+
+### Changed
+- Client website placeholder: `https://chip.ca` → `https://www.yourdomain.com`
+- Brand name placeholder: `CHIP` → `Your brand name`
+- Brand aliases placeholder: `CHIP Reverse Mortgage, HomeEquity Bank` → `Your Brand Inc., Your Brand Co.`
+
+### Notes
+- Placeholders only — they vanish the moment the user types anything, so this doesn't affect anyone with a project already created. Pure copy edit on `app/projects/new/page.tsx`.
+- Confirmed via grep that no other components, copy strings, or default state values still reference CHIP or chip.ca. The app is now fully brand-agnostic.
+
+## [1.0.8] — 2026-05-13
+
+Delete a project from the projects list.
+
+### Added
+- **Trash icon on every project card** (top-right corner, red-on-hover). Click opens a confirmation modal.
+- **Type-to-confirm modal** — to avoid accidental deletes, the user must type the project's brand name exactly before the "Delete project" button enables. Plus an explicit Cancel button and Escape-to-close. The button shows a spinner during the network call.
+- New `components/ProjectCard.tsx` client component — extracted from `app/page.tsx` so the server-rendered project list can host per-card interactivity without converting the whole page to a client component.
+
+### Notes
+- **Backend was already complete** — `DELETE /api/projects/[id]` has been live since v1.0.0, `lib/db.ts#deleteProject` executes `DELETE FROM projects WHERE id = ?`, and the schema has `ON DELETE CASCADE` on every foreign key referencing `projects(id)`. So a single DELETE atomically wipes the project plus all dependent rows: keywords, competitors, snapshots, serp_results, citations, mentions. No partial state, no orphan rows.
+- After a successful delete the page calls `router.refresh()` so the server-rendered list re-fetches without a hard reload.
+- No schema, env-var, or dependency changes.
+
 ## [1.0.7] — 2026-05-13
 
 Download the Keyword Drilldown as Excel (CSV) or PDF.

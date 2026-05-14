@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { listProjects } from "@/lib/db";
+import ProjectCard from "@/components/ProjectCard";
 
 const cta: React.CSSProperties = {
   display: "inline-flex", alignItems: "center", gap: 6,
@@ -48,21 +49,19 @@ export default async function HomePage() {
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {projects.map((p) => (
-          <Link key={p.id} href={`/projects/${p.id}`} className="surface p-5 hover:border-white/20 transition" style={{ display: "block" }}>
-            <div className="text-xs dim">{p.client_domain}</div>
-            <div className="text-lg font-semibold mt-1">{p.brand_name}</div>
-            {p.segment_l1 && (
-              <div className="text-xs muted mt-1">
-                {[p.segment_l1, p.segment_l2, p.segment_l3].filter(Boolean).join(" › ")}
-              </div>
-            )}
-            <div className="mt-3 flex items-center gap-2">
-              {(p.regions ?? ["us"]).map((r) => (
-                <span key={r} className="tag tag-accent">{r.toUpperCase()}</span>
-              ))}
-              <span className="tag">{p.device}</span>
-            </div>
-          </Link>
+          <ProjectCard
+            key={p.id}
+            project={{
+              id: p.id,
+              client_domain: p.client_domain ?? null,
+              brand_name: p.brand_name,
+              segment_l1: p.segment_l1 ?? null,
+              segment_l2: p.segment_l2 ?? null,
+              segment_l3: p.segment_l3 ?? null,
+              regions: p.regions ?? null,
+              device: p.device,
+            }}
+          />
         ))}
       </div>
     </div>

@@ -148,38 +148,6 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
         {Object.entries(sourcesCount).map(([k, v]) => <span key={k} className="tag">{k}: {v}</span>)}
       </div>
 
-      {/* Cluster trigger — separates the "manage keywords" surface from the
-          "analyze them" surface. Disabled when there's nothing to cluster. */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 10, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)" }}>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#a878ff", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <i className="ti ti-layers-subtract" style={{ fontSize: 12 }} aria-hidden="true"></i>Topic clustering
-          </div>
-          <div style={{ fontSize: 11, color: "#8a93a6", marginTop: 2 }}>
-            Group keywords into 5-8 topic buckets so you can see which topics you're winning vs losing.
-          </div>
-        </div>
-        <button
-          onClick={runClustering}
-          disabled={clustering || keywords.length === 0}
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 5,
-            padding: "6px 11px", borderRadius: 8,
-            background: clustering || keywords.length === 0 ? "rgba(168,120,255,0.18)" : "#a878ff",
-            color: "#06070b", fontSize: 12, fontWeight: 600, border: "none",
-            cursor: clustering || keywords.length === 0 ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-          }}
-        >
-          <i className={`ti ${clustering ? "ti-loader-2" : "ti-wand"}`} style={{ fontSize: 13 }} aria-hidden="true"></i>
-          {clustering ? "Clustering…" : "Cluster keywords"}
-        </button>
-      </div>
-      {lastClusterSummary && lastClusterSummary.length > 0 && (
-        <div style={{ marginTop: 8, fontSize: 11, color: "#8a93a6" }}>
-          Last run: {lastClusterSummary.map((c) => `${c.name} (${c.count})`).join(" · ")}
-        </div>
-      )}
-
       <div className="flex gap-2 mt-4 flex-wrap">
         {tabBtn("manual", "Manual / CSV")}
         {tabBtn("organic", "Pull from client organic")}
@@ -244,6 +212,39 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
       </div>
 
       {msg && <div className="mt-3 text-xs muted">{msg}</div>}
+
+      {/* Cluster trigger — sits below the input surfaces because clustering
+          is an analytical step that only makes sense once keywords exist.
+          Disabled when there's nothing to cluster. */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)" }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: "#a878ff", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 5 }}>
+            <i className="ti ti-layers-subtract" style={{ fontSize: 12 }} aria-hidden="true"></i>Topic clustering
+          </div>
+          <div style={{ fontSize: 11, color: "#8a93a6", marginTop: 2 }}>
+            Group keywords into 5-8 topic buckets so you can see which topics you're winning vs losing.
+          </div>
+        </div>
+        <button
+          onClick={runClustering}
+          disabled={clustering || keywords.length === 0}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "6px 11px", borderRadius: 8,
+            background: clustering || keywords.length === 0 ? "rgba(168,120,255,0.18)" : "#a878ff",
+            color: "#06070b", fontSize: 12, fontWeight: 600, border: "none",
+            cursor: clustering || keywords.length === 0 ? "not-allowed" : "pointer", whiteSpace: "nowrap",
+          }}
+        >
+          <i className={`ti ${clustering ? "ti-loader-2" : "ti-wand"}`} style={{ fontSize: 13 }} aria-hidden="true"></i>
+          {clustering ? "Clustering…" : "Cluster keywords"}
+        </button>
+      </div>
+      {lastClusterSummary && lastClusterSummary.length > 0 && (
+        <div style={{ marginTop: 8, fontSize: 11, color: "#8a93a6" }}>
+          Last run: {lastClusterSummary.map((c) => `${c.name} (${c.count})`).join(" · ")}
+        </div>
+      )}
 
       {keywords.length > 0 && (
         <details className="mt-4">

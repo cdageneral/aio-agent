@@ -167,47 +167,76 @@ export default function StoryPanel({
           .reduce((acc: number, s: any) => acc + (s.slots ?? 0), 0);
         const othersShare = totalSlots ? otherSlots / totalSlots : 0;
         return (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mt-6">
-            <Pulse
-              label="AIO penetration"
-              value={fmtPct(triggerPct)}
-              sub={`${latest.total_aios_triggered.toLocaleString()} of ${totalKw.toLocaleString()} queries`}
-              accent="cyan"
-              explanation="The percentage of your tracked queries where Google is showing an AI Overview. High penetration means AIOs have already reshaped this SERP — traditional organic clicks are being substituted for Google's AIO summary. When this number is high, AIO citation strategy isn't optional."
-            />
-            <Pulse
-              label="Brand mentions"
-              value={fmtPct(mentionShare)}
-              sub={`${mentionCount} of ${totalKw.toLocaleString()} brand mentions`}
-              accent="lime"
-              explanation="AIOs where your brand name appears in the answer text, with or without a citation link. A softer signal than Citation Share — Google is talking about you even if you didn't earn the clickable source slot. The gap between this and Citation Share tells you whether to focus on content quality (convert mentions to citations) or topical authority (get into the answer text in the first place)."
-            />
-            <Pulse
-              label="Citation share"
-              value={fmtPct(clientShare)}
-              sub={`${client?.aios_acquired ?? 0} of ${totalKw.toLocaleString()} citations`}
-              accent="blue"
-              explanation="The percentage of your tracked queries where your domain was cited as a source inside the AI Overview. This is the headline performance metric — how often you appear when an AIO triggers and earn the click. Most brands land in the 5–25% range. Above 50% is exceptional and means you're dominating your category."
-            />
-            <Pulse
-              label={`Top brand · ${topBrand?.brand_name ?? "—"}`}
-              value={fmtPct(topBrandShare)}
-              sub={topBrand?.kind === "client" ? "you lead" : "leads the field"}
-              accent="pink"
-              explanation="The brand with the highest citation share across this snapshot's AIOs. When you ARE the top brand, this card matches your Citation Share. When a competitor is on top, this card shows their share and the gap between you and them is how far behind you are. Look at this card and Citation Share side-by-side to see your competitive position at a glance."
-            />
-            <Pulse
-              label="Others"
-              value={fmtPct(othersShare)}
-              sub="view all →"
-              accent="amber"
-              onClick={() => {
-                if (typeof document !== "undefined") {
-                  document.getElementById("section-other-domains")?.scrollIntoView({ behavior: "smooth", block: "start" });
-                }
-              }}
-              explanation="The percentage of AIO citation slots going to sources NOT in your tracked set — Wikipedia, Reddit, news sites, industry sites you haven't added as competitors. High 'Others' means lots of zero-click attention is being captured by sources you might want to add as competitors. Click the card to scroll to the full domain list."
-            />
+          <div className="mt-6">
+            {/* ── Top row · SERP saturation ──────────────────────────────────
+                "How big is the AIO battleground?" Elevated cards because the
+                rest of the panel's math only matters if AIOs are happening. */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <Pulse
+                label="Available AIOs"
+                value={latest.total_aios_triggered.toLocaleString()}
+                sub={`across ${totalKw.toLocaleString()} tracked quer${totalKw === 1 ? "y" : "ies"}`}
+                accent="cyan"
+                emphasis
+                explanation="The raw count of AI Overviews Google is currently surfacing across your tracked keyword universe. This is the absolute size of the AIO battleground — how many actual AIO answers exist for you to potentially be cited in. The bigger this number, the more individual answers you have to engineer your way into."
+              />
+              <Pulse
+                label="AIO Penetration in SERP"
+                value={fmtPct(triggerPct)}
+                sub={`${latest.total_aios_triggered.toLocaleString()} of ${totalKw.toLocaleString()} queries`}
+                accent="cyan"
+                emphasis
+                explanation="The percentage of your tracked queries where Google is showing an AI Overview. This is how saturated this SERP is — high penetration means AIOs have already reshaped the experience and traditional organic clicks are being substituted for Google's AIO summary. When this number is high, AIO citation strategy isn't optional."
+              />
+            </div>
+
+            {/* ── Bottom row · Client placement within the battleground ─────
+                "Given AIOs are happening, where do you sit?" Five cards at
+                normal weight, since they're context to the SERP-level story.
+                Acquisition · {client} mirrors Top brand · {leader} so the two
+                read as a direct head-to-head comparison. */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mt-3">
+              <Pulse
+                label={`Acquisition · ${project.brand_name}`}
+                value={fmtPct(clientShare)}
+                sub={clientRank === 1 ? "you lead the field" : `you're ${ordinal(clientRank)} of ${ranked.length}`}
+                accent="blue"
+                explanation={`${project.brand_name}'s AIO acquisition rate — the percentage of tracked queries where your domain is cited as a source inside the AI Overview. Uses the same formula as the Top Brand card so you can compare side by side: the gap between this number and Top Brand's number is the ground you need to make up. When you ARE the top brand, the two cards converge.`}
+              />
+              <Pulse
+                label="Brand mentions"
+                value={fmtPct(mentionShare)}
+                sub={`${mentionCount} of ${totalKw.toLocaleString()} brand mentions`}
+                accent="lime"
+                explanation="AIOs where your brand name appears in the answer text, with or without a citation link. A softer signal than Acquisition — Google is talking about you even if you didn't earn the clickable source slot. The gap between this and Acquisition tells you whether to focus on content quality (convert mentions to citations) or topical authority (get into the answer text in the first place)."
+              />
+              <Pulse
+                label="Citation share"
+                value={fmtPct(clientShare)}
+                sub={`${client?.aios_acquired ?? 0} of ${totalKw.toLocaleString()} citations`}
+                accent="blue"
+                explanation="The percentage of your tracked queries where your domain was cited as a source inside the AI Overview. Same number as the Acquisition card on the left — this is the generic/template framing for the same metric. Most brands land in the 5–25% range. Above 50% is exceptional and means you're dominating your category."
+              />
+              <Pulse
+                label={`Top brand · ${topBrand?.brand_name ?? "—"}`}
+                value={fmtPct(topBrandShare)}
+                sub={topBrand?.kind === "client" ? "you lead" : "leads the field"}
+                accent="pink"
+                explanation="The brand with the highest citation share across this snapshot's AIOs. When you ARE the top brand, this card matches your Acquisition card. When a competitor is on top, this card shows their share and the gap between you and them is how far behind you are. Look at this card and the Acquisition card side-by-side to see your competitive position at a glance."
+              />
+              <Pulse
+                label="Others"
+                value={fmtPct(othersShare)}
+                sub="view all →"
+                accent="amber"
+                onClick={() => {
+                  if (typeof document !== "undefined") {
+                    document.getElementById("section-other-domains")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }
+                }}
+                explanation="The percentage of AIO citation slots going to sources NOT in your tracked set — Wikipedia, Reddit, news sites, industry sites you haven't added as competitors. High 'Others' means lots of zero-click attention is being captured by sources you might want to add as competitors. Click the card to scroll to the full domain list."
+              />
+            </div>
           </div>
         );
       })()}
@@ -229,7 +258,7 @@ export default function StoryPanel({
 }
 
 function Pulse({
-  label, value, sub, accent, onClick, explanation,
+  label, value, sub, accent, onClick, explanation, emphasis = false,
 }: {
   label: string;
   value: string;
@@ -239,6 +268,9 @@ function Pulse({
   onClick?: () => void;
   /** When set, an (i) icon appears top-right. Click toggles a popover with this text. */
   explanation?: string;
+  /** When true, the card renders larger — bigger value font, more padding, stronger border.
+   *  Used by the top-row SERP-saturation cards to make them feel elevated above the placement row. */
+  emphasis?: boolean;
 }) {
   const accentVar = `var(--accent-${accent})`;
   const accentSoft = `var(--accent-${accent}-soft)`;
@@ -268,11 +300,12 @@ function Pulse({
       role={clickable ? "button" : undefined}
       tabIndex={clickable ? 0 : undefined}
       onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
-      className="rounded-xl p-3"
+      className={emphasis ? "rounded-xl p-5" : "rounded-xl p-3"}
       style={{
         position: "relative",
         background: accentSoft,
-        border: `1px solid ${accentVar}33`,
+        border: emphasis ? `1px solid ${accentVar}66` : `1px solid ${accentVar}33`,
+        boxShadow: emphasis ? `0 0 0 1px ${accentVar}22, 0 6px 18px rgba(0,0,0,0.25)` : undefined,
         cursor: clickable ? "pointer" : "default",
         transition: "border-color 120ms ease, transform 80ms ease",
       }}
@@ -343,9 +376,9 @@ function Pulse({
           )}
         </>
       )}
-      <div className="text-[10px] uppercase tracking-wide font-semibold" style={{ color: accentVar, paddingRight: explanation ? 22 : 0 }}>{label}</div>
-      <div className="text-2xl font-semibold mt-1" style={{ color: "var(--text)" }}>{value}</div>
-      <div className="text-[11px] muted mt-1">{sub}</div>
+      <div className={`uppercase tracking-wide font-semibold ${emphasis ? "text-[11px]" : "text-[10px]"}`} style={{ color: accentVar, paddingRight: explanation ? 22 : 0 }}>{label}</div>
+      <div className={`font-semibold mt-1 ${emphasis ? "text-4xl" : "text-2xl"}`} style={{ color: "var(--text)", letterSpacing: emphasis ? "-0.025em" : undefined, lineHeight: emphasis ? 1.05 : undefined }}>{value}</div>
+      <div className={`muted mt-1 ${emphasis ? "text-[12px]" : "text-[11px]"}`}>{sub}</div>
     </div>
   );
 }
