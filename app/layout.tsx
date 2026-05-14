@@ -25,17 +25,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </Link>
             <nav className="text-sm flex items-center gap-4">
               <Link href="/" className="muted hover:text-white transition">Projects</Link>
-              <Link
-                href="/projects/new"
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  padding: "8px 14px", borderRadius: 10,
-                  background: "#b6f53b", color: "#06070b",
-                  fontWeight: 600, fontSize: 13, textDecoration: "none",
-                }}
-              >
-                + New project
-              </Link>
             </nav>
           </div>
         </header>

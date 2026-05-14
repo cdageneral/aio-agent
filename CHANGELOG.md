@@ -4,6 +4,66 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.9] — 2026-05-13
+
+Load the Tabler Icons font (every icon in the app was invisible) and remove the duplicate "+ New project" button from the global nav header.
+
+### Fixed
+- **Tabler Icons font was never loaded.** Every icon throughout the app — `ti ti-trash` on project cards, `ti ti-edit` pencils, `ti ti-refresh` on the dashboard refresh button, `ti ti-file-spreadsheet` / `ti ti-file-text` on the Excel and PDF export buttons, `ti ti-wand` on the smart detector, `ti ti-info-circle` and the chevrons, `ti ti-swords` on the Battleground badge — every single one was rendering as an empty glyph because the webfont wasn't included. The buttons WERE working (the trash button's click handler fires correctly, opens the confirmation modal, etc.) but they looked broken because the icon was invisible. Added `@import url("https://cdn.jsdelivr.net/npm/@tabler/[email protected]/dist/tabler-icons.min.css");` at the top of `app/globals.css` so the webfont loads as part of the CSS bundle.
+- **Duplicate "+ New project" button in the global nav.** Layout header had its own lime "+ New project" Link that appeared on every page next to the "Projects" nav link. On the projects list this created a SECOND duplicate of the page-header CTA (v1.1.8 only removed the empty-state one). Removed the nav button — the page-header button on the projects list is now the single contextual entry point.
+
+### Notes
+- Net effect: trash icons on project cards now show correctly, delete confirmation modal opens on click, every other icon in the app finally renders. No code changes to ProjectCard.tsx — the delete flow worked all along, just looked broken because the icon was missing.
+- The nav still has the "Projects" link to navigate back to the projects list from anywhere.
+
+## [1.1.8] — 2026-05-13
+
+Remove the duplicate "+ New project" CTA on the projects list.
+
+### Fixed
+- **Two lime CTAs were stacked on the empty projects page** — one in the header ("+ New project"), one in the empty-state card ("Create your first project"). Both linked to `/projects/new`, both styled identically. Confusing when both were visible at once.
+
+### Changed
+- Empty state card now shows just a helpful pointer message ("Click the lime + New project button above to set up your first one.") with no second button.
+- Header "+ New project" button remains the single, always-visible CTA — present whether the list is empty or full.
+
+### Notes
+- Pure markup + copy edit on `app/page.tsx`. No schema, no API, no dependency changes.
+
+## [1.1.7] — 2026-05-13
+
+Streamline the Keyword Universe panel — manual + CSV only.
+
+### Removed
+- **Source tab picker** (Manual / CSV · Pull from client organic · Shared market set · Seed → related). The three SerpAPI-heavy expansion paths are gone. Smart detection on the ProjectHeader already populates seed keywords automatically, and paste / CSV upload covers everything else. The tab state, the seed-text state, and all the organic/market/seed submit code paths in `submit()` are removed.
+
+### Changed
+- **Single-purpose input.** The panel now shows one textarea ("Paste keywords here — one per line or comma-separated") plus a compact row with two upload links (Keywords CSV, Volumes CSV) and the Add button. No mode switching, no conditional rendering.
+- **Tighter spacing.** Upload links shrunk to 11px font and renamed to short labels ("Keywords CSV", "Volumes CSV") so the row fits on one line at typical viewport widths. Textarea min-height reduced from 100px to 76px. Status message font dropped from 12px to 11px.
+
+### Notes
+- Existing keywords ingested via the removed paths (source = "organic", "market", "seed") still show up in the keyword list with their original source badge — only the *ingestion UI* is gone, the historical data is preserved.
+- The API route still accepts `method: "organic"`, `"market"`, and `"seed"` POSTs in case anything still calls them — purely a UI removal.
+
+## [1.1.6] — 2026-05-13
+
+Fix the auto-clustering loop introduced in v1.1.5.
+
+### Fixed
+- **Auto-clustering was running in a continuous loop.** The v1.1.5 effect compared `keywords.length` against a `lastClusteredCountRef`, which was correct in theory but fragile in practice — `onChanged()` after a cluster run triggered a parent re-render that passed back a fresh keyword array reference. Even though the length hadn't changed, the cascade caused repeat cluster API calls in some cases.
+
+### Changed
+- **Now uses a keyword-set signature.** On every render, KeywordPanel builds a stable signature from the sorted, lowercased keyword strings and compares it against the last clustered signature. Same set → no re-cluster. Different set (add / edit / delete) → schedule a debounced re-cluster.
+- **First-mount detection**: if every keyword in the loaded set already has a `cluster_label` from the database, the previous clustering still applies — we just memoize the signature and skip the API call. Page reloads with already-clustered universes cost zero Claude credits.
+
+### Behavior the user will see
+- Cluster runs **once** at the beginning when keywords are first added (or on a project that hasn't been clustered yet).
+- Cluster runs **on add / edit / delete** of keywords, debounced 8 seconds.
+- Cluster does **not** run repeatedly while nothing has actually changed.
+
+### Notes
+- Surfaced the `cluster_label` field on the local Keyword type so the signature-based check can read it without a cast.
+
 ## [1.1.5] — 2026-05-13
 
 Rework the keyword flow: detected keywords flow straight into the universe, the keyword list is always visible with inline edit, clustering happens automatically.

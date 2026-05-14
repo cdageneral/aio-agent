@@ -42,8 +42,8 @@ export default async function HomePage() {
 
       {!dbError && projects.length === 0 && (
         <div className="surface p-10 text-center">
-          <div className="text-base muted mb-3">No projects yet.</div>
-          <Link href="/projects/new" style={cta}>Create your first project</Link>
+          <div className="text-base muted">No projects yet.</div>
+          <div className="text-xs dim mt-2">Click the lime <strong style={{ color: "var(--text)" }}>+ New project</strong> button above to set up your first one.</div>
         </div>
       )}
 

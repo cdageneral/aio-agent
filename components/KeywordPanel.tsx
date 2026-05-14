@@ -4,30 +4,33 @@ import { primaryBtnStyle } from "./uiStyles";
 
 type ClusterSummary = { name: string; description: string; count: number };
 
-type Keyword = { id: string; keyword: string; source: string };
+type Keyword = { id: string; keyword: string; source: string; cluster_label?: string | null };
 
 export default function KeywordPanel({ projectId, onChanged }: { projectId: string; onChanged: () => void }) {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [max, setMax] = useState(500);
-  const [tab, setTab] = useState<"manual" | "organic" | "market" | "seed">("manual");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [clustering, setClustering] = useState(false);
   const [lastClusterSummary, setLastClusterSummary] = useState<ClusterSummary[] | null>(null);
 
-  // form state per tab
+  // v1.1.7: only manual entry remains. The organic/market/seed expansion paths
+  // were removed — smart detection on the project header populates seed
+  // keywords automatically, and bulk paste / CSV covers everything else.
   const [manualText, setManualText] = useState("");
-  const [seedText, setSeedText] = useState("");
 
   // v1.1.5: inline edit state — track which keyword id is being edited and what
   // the in-flight text value is. Only one row is editable at a time.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
 
-  // v1.1.5: auto-clustering bookkeeping — last clustered keyword count so we
-  // don't re-fire when the user is just editing existing rows. Cluster only
-  // when the universe size has meaningfully changed.
-  const lastClusteredCountRef = useRef(0);
+  // v1.1.6: auto-clustering bookkeeping. We compare a signature of the current
+  // keyword SET (sorted, lowercased) against the signature we last clustered.
+  // This handles add / edit / delete uniformly — any of them produces a new
+  // signature — and avoids spurious re-cluster loops when onChanged() causes
+  // the parent to re-fetch and pass back a fresh-reference-but-same-content
+  // keyword array.
+  const lastClusteredSigRef = useRef<string>("");
 
   async function load() {
     const res = await fetch(`/api/projects/${projectId}/keywords`);
@@ -37,52 +40,64 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
   }
   useEffect(() => { load(); }, [projectId]);
 
-  // v1.1.5: auto-cluster on a debounce when the keyword universe grows. We
-  // require at least 5 keywords for a meaningful clustering result, and we
-  // only re-fire when the count delta is non-trivial (avoids spamming the
-  // Claude API on every keyword add when the user is bulk-pasting).
+  // v1.1.6: auto-cluster on a debounce when the keyword set changes.
+  // Triggers on initial mount (if keywords aren't already clustered) and
+  // any time keywords are added, edited, or deleted. Skips re-runs when the
+  // current set matches what we last clustered (avoids the loop bug from
+  // v1.1.5 where onChanged() refetches caused repeated clustering even
+  // though the keyword set hadn't changed).
   useEffect(() => {
     if (keywords.length < 5) return;
-    if (keywords.length === lastClusteredCountRef.current) return;
+
+    // Build a stable signature: sorted lowercase keyword strings joined.
+    // Same strings → same cluster result, regardless of array reference or order.
+    const sig = keywords.map((k) => k.keyword.toLowerCase().trim()).sort().join("|");
+
+    // Already clustered this exact set in-session → nothing to do.
+    if (sig === lastClusteredSigRef.current) return;
+
+    // First time we're seeing this set this session. If the database already
+    // has cluster_label on every keyword, the previous clustering still applies
+    // and we should NOT re-run. Just memo the sig and exit.
+    const firstRun = lastClusteredSigRef.current === "";
+    if (firstRun && keywords.every((k) => !!k.cluster_label)) {
+      lastClusteredSigRef.current = sig;
+      return;
+    }
+
+    // Otherwise schedule a debounced cluster — long enough that bulk pastes
+    // and detect-driven seed flushes don't thrash the Claude API.
     const timer = setTimeout(async () => {
-      if (clustering) return;
       setClustering(true);
       try {
         const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
         if (res.ok) {
           const j = await res.json();
-          lastClusteredCountRef.current = keywords.length;
+          lastClusteredSigRef.current = sig;
           setLastClusterSummary(j.clusters ?? null);
           onChanged();
         }
       } catch { /* swallow — auto-cluster shouldn't surface errors */ }
       finally { setClustering(false); }
-    }, 8000); // 8s debounce — long enough to bulk-paste without thrashing
+    }, 8000);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keywords.length, projectId]);
+  }, [keywords, projectId]);
 
   async function submit() {
     setBusy(true);
     setMsg(null);
     try {
-      let body: any = { method: tab };
-      if (tab === "manual") {
-        body.keywords = manualText.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-      } else if (tab === "seed") {
-        body.seeds = seedText.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-      } else if (tab === "organic" || tab === "market") {
-        body.seedKeywords = seedText.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
-      }
+      const keywords = manualText.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
       const res = await fetch(`/api/projects/${projectId}/keywords`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ method: "manual", keywords }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Failed");
       setMsg(`Added ${j.added} keyword(s).`);
-      setManualText(""); setSeedText("");
+      setManualText("");
       await load();
       onChanged();
     } catch (e: any) {
@@ -194,18 +209,6 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
     return acc;
   }, {});
 
-  const tabBtn = (k: typeof tab, label: string) => (
-    <button
-      onClick={() => setTab(k)}
-      className="text-xs px-2.5 py-1 rounded-md"
-      style={tab === k
-        ? { background: "var(--accent-blue-soft)", color: "var(--accent-blue)", border: "1px solid var(--accent-blue)" }
-        : { background: "var(--surface-2)", color: "var(--muted)", border: "1px solid var(--line)" }}
-    >
-      {label}
-    </button>
-  );
-
   return (
     <div className="surface p-5">
       <div className="flex items-baseline justify-between">
@@ -216,70 +219,45 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
         {Object.entries(sourcesCount).map(([k, v]) => <span key={k} className="tag">{k}: {v}</span>)}
       </div>
 
-      <div className="flex gap-2 mt-4 flex-wrap">
-        {tabBtn("manual", "Manual / CSV")}
-        {tabBtn("organic", "Pull from client organic")}
-        {tabBtn("market", "Shared market set")}
-        {tabBtn("seed", "Seed → related")}
-      </div>
-
+      {/* v1.1.7: streamlined input — single textarea for manual paste plus
+          inline CSV uploads. Detected keywords flow in automatically via the
+          ProjectHeader's Detect button, so the panel only needs manual + CSV. */}
       <div className="mt-3">
-        {tab === "manual" && (
-          <div className="space-y-2">
-            <textarea
-              className="input min-h-[100px]"
-              placeholder="One keyword per line, or comma-separated."
-              value={manualText}
-              onChange={(e) => setManualText(e.target.value)}
-            />
-            <div className="flex items-center justify-between flex-wrap gap-3">
-              <div className="flex items-center gap-4">
-                <label className="text-xs muted cursor-pointer hover:text-white transition">
-                  <i className="ti ti-upload" style={{ fontSize: 12, marginRight: 4, verticalAlign: -1 }} aria-hidden="true"></i>
-                  Upload keywords (CSV)
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCsv(f); }}
-                  />
-                </label>
-                <label className="text-xs cursor-pointer hover:text-white transition" style={{ color: "#ffb846" }}>
-                  <i className="ti ti-chart-bar" style={{ fontSize: 12, marginRight: 4, verticalAlign: -1 }} aria-hidden="true"></i>
-                  Upload volumes (CSV: keyword, monthly_volume)
-                  <input
-                    type="file"
-                    accept=".csv,text/csv"
-                    className="hidden"
-                    onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadVolumes(f); }}
-                  />
-                </label>
-              </div>
-              <button style={primaryBtnStyle(busy || !manualText.trim())} disabled={busy || !manualText.trim()} onClick={submit}>Add</button>
-            </div>
+        <textarea
+          className="input"
+          style={{ minHeight: 76 }}
+          placeholder="Paste keywords here — one per line or comma-separated."
+          value={manualText}
+          onChange={(e) => setManualText(e.target.value)}
+        />
+        <div className="flex items-center justify-between flex-wrap gap-2 mt-2">
+          <div className="flex items-center gap-3 text-[11px]">
+            <label className="cursor-pointer hover:text-white transition" style={{ color: "var(--muted)" }}>
+              <i className="ti ti-upload" style={{ fontSize: 12, marginRight: 3, verticalAlign: -1 }} aria-hidden="true"></i>
+              Keywords CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCsv(f); }}
+              />
+            </label>
+            <label className="cursor-pointer hover:text-white transition" style={{ color: "#ffb846" }}>
+              <i className="ti ti-chart-bar" style={{ fontSize: 12, marginRight: 3, verticalAlign: -1 }} aria-hidden="true"></i>
+              Volumes CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadVolumes(f); }}
+              />
+            </label>
           </div>
-        )}
-        {(tab === "organic" || tab === "market" || tab === "seed") && (
-          <div className="space-y-2">
-            <textarea
-              className="input min-h-[100px]"
-              placeholder={tab === "seed" ? "Seed keywords for related-search expansion." : "Seed keywords (we'll expand via related searches, then keep what matches)."}
-              value={seedText}
-              onChange={(e) => setSeedText(e.target.value)}
-            />
-            <div className="text-xs muted">
-              {tab === "organic" && "Keeps only seeds/related where the client domain ranks top-100."}
-              {tab === "market" && "Keeps seeds/related where any tracked brand (client + competitors) ranks top-100."}
-              {tab === "seed" && "Stores related-search/PAA expansions as-is, no rank filter."}
-            </div>
-            <div className="flex justify-end">
-              <button style={primaryBtnStyle(busy || !seedText.trim())} disabled={busy || !seedText.trim()} onClick={submit}>Discover</button>
-            </div>
-          </div>
-        )}
+          <button style={primaryBtnStyle(busy || !manualText.trim())} disabled={busy || !manualText.trim()} onClick={submit}>Add</button>
+        </div>
       </div>
 
-      {msg && <div className="mt-3 text-xs muted">{msg}</div>}
+      {msg && <div className="mt-2 text-[11px] muted">{msg}</div>}
 
       {/* v1.1.5: Auto-clustering status. Clustering fires automatically when
           the universe size changes (debounced 8s, minimum 5 keywords). The
