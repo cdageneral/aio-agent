@@ -159,6 +159,20 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
       {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
 
+      {/* Inputs grouped together — all "things to configure before running a refresh"
+          sit at the top, all results (Story, charts, clusters, drilldown) sit below. */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <CompetitorPanel
+          projectId={projectId}
+          competitors={competitors}
+          onChanged={load}
+          suggested={suggestedCompetitors}
+          onSuggestionAdded={(domain) => persistSuggestions(suggestedCompetitors.filter((c) => c.domain !== domain))}
+          onSuggestionDismissed={(domain) => persistSuggestions(suggestedCompetitors.filter((c) => c.domain !== domain))}
+        />
+        <KeywordPanel projectId={projectId} onChanged={load} />
+      </section>
+
       <FirstRefreshBanner
         keywordsCount={data.keywords_count ?? 0}
         region={region}
@@ -191,18 +205,6 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           />
         );
       })()}
-
-      <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        <CompetitorPanel
-          projectId={projectId}
-          competitors={competitors}
-          onChanged={load}
-          suggested={suggestedCompetitors}
-          onSuggestionAdded={(domain) => persistSuggestions(suggestedCompetitors.filter((c) => c.domain !== domain))}
-          onSuggestionDismissed={(domain) => persistSuggestions(suggestedCompetitors.filter((c) => c.domain !== domain))}
-        />
-        <KeywordPanel projectId={projectId} onChanged={load} />
-      </section>
 
       <section className="surface p-5">
         <div className="flex items-baseline justify-between mb-3">

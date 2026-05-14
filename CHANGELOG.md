@@ -4,6 +4,35 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.5] — 2026-05-13
+
+Rework the keyword flow: detected keywords flow straight into the universe, the keyword list is always visible with inline edit, clustering happens automatically.
+
+### Changed
+- **Detected seed keywords auto-apply.** When you click Detect or Re-detect, the suggested keywords are pushed directly into the Keyword Universe panel below — no chip preview drawer under the segment, no second "Use these" click required for keywords. The detection card now shows a small "Added N seed keywords to the universe below" confirmation line instead of a chip list. The Keyword Universe is the single source of truth; review, edit, or delete there.
+- **Keyword list is always visible.** Replaced the `<details>` collapsible "View keywords" with an always-visible scrollable section so you can see every tracked keyword without expanding anything.
+- **Inline keyword edit.** Click any keyword text in the list to turn it into an input. Press Enter or click away to save, Escape to cancel. Save replaces the old keyword (delete + add-as-manual) so the universe count stays consistent. Remove button still lives on the right.
+- **The "Use these" button** now only confirms segment + competitors + region (keywords are already applied on detect). Subtext updated to match.
+
+### Added
+- **Auto-clustering.** Topic clustering now fires automatically on a debounced timer whenever the keyword count changes. 8-second debounce so bulk pastes don't thrash the Claude API; minimum 5 keywords required to trigger. The explicit "Cluster keywords" button is gone — replaced with a status indicator showing the current state ("Topic clustering · automatic" / "Auto-clustering…" / list of current clusters).
+
+### Notes
+- No schema changes. Uses existing endpoints: POST `/api/projects/{id}/keywords` (add), DELETE `/api/projects/{id}/keywords?keyword_id=…` (remove), POST `/api/projects/{id}/cluster-keywords` (cluster). Inline edit uses delete + re-add since there's no PATCH endpoint for individual keywords.
+- Cost note: auto-clustering will fire after detection completes (since detection adds 10-15 keywords at once, crossing the 5-keyword threshold), and again whenever you add or remove keywords. Each cluster call to Claude Haiku is ~$0.01. The 8-second debounce keeps it from spamming.
+
+## [1.1.4] — 2026-05-13
+
+Reorganize the dashboard so inputs are grouped at the top and results sit together below.
+
+### Changed
+- **Competitors + Keyword Universe panels moved up** to sit directly under ProjectHeader, before the FirstRefreshBanner. This groups all configurable inputs in one band at the top of the page — domain, brand, segment detection, competitors, keyword universe, region, clustering trigger — so the user can finish setup before scrolling into results.
+- **Results stack stays in the same order below**: Story → Share of Voice → What Changed → AIO Trends → Topic Clusters → AIO Opportunities → Keyword Drilldown → Other Domains.
+
+### Notes
+- Pure section reorder, no logic changes. Same data flow, same endpoints. The CompetitorPanel still gets its `suggested` prop, the KeywordPanel still calls `onChanged={load}` to refresh the metrics payload when the universe changes.
+- Workflow read now flows top-to-bottom: configure → cluster → refresh → read the story → drill into the drilldown.
+
 ## [1.1.3] — 2026-05-13
 
 Add an "Acquisition · {client}" pulse card so the client's number reads side-by-side against "Top brand · {leader}."

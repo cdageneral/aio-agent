@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { primaryBtnStyle } from "./uiStyles";
 
 type ClusterSummary = { name: string; description: string; count: number };
@@ -19,6 +19,16 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
   const [manualText, setManualText] = useState("");
   const [seedText, setSeedText] = useState("");
 
+  // v1.1.5: inline edit state — track which keyword id is being edited and what
+  // the in-flight text value is. Only one row is editable at a time.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState("");
+
+  // v1.1.5: auto-clustering bookkeeping — last clustered keyword count so we
+  // don't re-fire when the user is just editing existing rows. Cluster only
+  // when the universe size has meaningfully changed.
+  const lastClusteredCountRef = useRef(0);
+
   async function load() {
     const res = await fetch(`/api/projects/${projectId}/keywords`);
     const j = await res.json();
@@ -26,6 +36,31 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
     setMax(j.max ?? 500);
   }
   useEffect(() => { load(); }, [projectId]);
+
+  // v1.1.5: auto-cluster on a debounce when the keyword universe grows. We
+  // require at least 5 keywords for a meaningful clustering result, and we
+  // only re-fire when the count delta is non-trivial (avoids spamming the
+  // Claude API on every keyword add when the user is bulk-pasting).
+  useEffect(() => {
+    if (keywords.length < 5) return;
+    if (keywords.length === lastClusteredCountRef.current) return;
+    const timer = setTimeout(async () => {
+      if (clustering) return;
+      setClustering(true);
+      try {
+        const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
+        if (res.ok) {
+          const j = await res.json();
+          lastClusteredCountRef.current = keywords.length;
+          setLastClusterSummary(j.clusters ?? null);
+          onChanged();
+        }
+      } catch { /* swallow — auto-cluster shouldn't surface errors */ }
+      finally { setClustering(false); }
+    }, 8000); // 8s debounce — long enough to bulk-paste without thrashing
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [keywords.length, projectId]);
 
   async function submit() {
     setBusy(true);
@@ -100,6 +135,39 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
     await fetch(`/api/projects/${projectId}/keywords?keyword_id=${id}`, { method: "DELETE" });
     await load();
     onChanged();
+  }
+
+  /**
+   * v1.1.5: inline edit a keyword. We don't have a PATCH endpoint for
+   * individual keywords, so the simple-but-correct path is delete + re-add
+   * as a manual entry. Same project, same surface, no schema changes.
+   */
+  async function saveEdit(oldId: string, newKeywordRaw: string) {
+    const newKeyword = newKeywordRaw.trim();
+    if (!newKeyword) { setEditingId(null); return; }
+    // No change → just close the editor.
+    const existing = keywords.find((k) => k.id === oldId);
+    if (existing && existing.keyword === newKeyword) { setEditingId(null); return; }
+    setBusy(true);
+    try {
+      await fetch(`/api/projects/${projectId}/keywords?keyword_id=${oldId}`, { method: "DELETE" });
+      await fetch(`/api/projects/${projectId}/keywords`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ method: "manual", keywords: [newKeyword] }),
+      });
+      await load();
+      onChanged();
+    } finally {
+      setBusy(false);
+      setEditingId(null);
+      setEditText("");
+    }
+  }
+
+  function startEdit(id: string, current: string) {
+    setEditingId(id);
+    setEditText(current);
   }
 
   async function runClustering() {
@@ -213,54 +281,88 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
 
       {msg && <div className="mt-3 text-xs muted">{msg}</div>}
 
-      {/* Cluster trigger — sits below the input surfaces because clustering
-          is an analytical step that only makes sense once keywords exist.
-          Disabled when there's nothing to cluster. */}
+      {/* v1.1.5: Auto-clustering status. Clustering fires automatically when
+          the universe size changes (debounced 8s, minimum 5 keywords). The
+          user no longer needs to click anything to trigger it. */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#a878ff", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 5 }}>
-            <i className="ti ti-layers-subtract" style={{ fontSize: 12 }} aria-hidden="true"></i>Topic clustering
+            <i className={`ti ${clustering ? "ti-loader-2" : "ti-layers-subtract"}`} style={{ fontSize: 12, animation: clustering ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
+            {clustering ? "Auto-clustering…" : "Topic clustering · automatic"}
           </div>
           <div style={{ fontSize: 11, color: "#8a93a6", marginTop: 2 }}>
-            Group keywords into 5-8 topic buckets so you can see which topics you're winning vs losing.
+            {keywords.length < 5
+              ? `Need at least 5 keywords to cluster. Currently ${keywords.length}.`
+              : clustering
+              ? "Grouping keywords into 5-8 topic buckets…"
+              : lastClusterSummary && lastClusterSummary.length > 0
+              ? `Clustered into ${lastClusterSummary.length} topic${lastClusterSummary.length === 1 ? "" : "s"}: ${lastClusterSummary.map((c) => `${c.name} (${c.count})`).join(" · ")}`
+              : "Keywords will be auto-clustered shortly after you add them."}
           </div>
         </div>
-        <button
-          onClick={runClustering}
-          disabled={clustering || keywords.length === 0}
-          style={{
-            display: "inline-flex", alignItems: "center", gap: 5,
-            padding: "6px 11px", borderRadius: 8,
-            background: clustering || keywords.length === 0 ? "rgba(168,120,255,0.18)" : "#a878ff",
-            color: "#06070b", fontSize: 12, fontWeight: 600, border: "none",
-            cursor: clustering || keywords.length === 0 ? "not-allowed" : "pointer", whiteSpace: "nowrap",
-          }}
-        >
-          <i className={`ti ${clustering ? "ti-loader-2" : "ti-wand"}`} style={{ fontSize: 13 }} aria-hidden="true"></i>
-          {clustering ? "Clustering…" : "Cluster keywords"}
-        </button>
       </div>
-      {lastClusterSummary && lastClusterSummary.length > 0 && (
-        <div style={{ marginTop: 8, fontSize: 11, color: "#8a93a6" }}>
-          Last run: {lastClusterSummary.map((c) => `${c.name} (${c.count})`).join(" · ")}
-        </div>
-      )}
 
-      {keywords.length > 0 && (
-        <details className="mt-4">
-          <summary className="text-xs muted cursor-pointer hover:text-white transition">View keywords ({keywords.length})</summary>
-          <ul className="mt-2 max-h-60 overflow-auto text-sm" style={{ borderTop: "1px solid var(--line)" }}>
+      {keywords.length > 0 ? (
+        <div className="mt-4">
+          <div className="flex items-baseline justify-between mb-2">
+            <div className="text-xs muted">Keywords ({keywords.length})</div>
+            <div className="text-[10px] dim">Click any keyword to edit · click remove to delete</div>
+          </div>
+          <ul className="text-sm" style={{ maxHeight: 320, overflowY: "auto", borderTop: "1px solid var(--line)" }}>
             {keywords.map((k) => (
-              <li key={k.id} className="flex items-center justify-between py-1.5" style={{ borderBottom: "1px solid var(--line)" }}>
-                <div className="truncate">
-                  <span>{k.keyword}</span>
-                  <span className="ml-2 tag">{k.source}</span>
+              <li key={k.id} className="flex items-center justify-between py-1.5 gap-2" style={{ borderBottom: "1px solid var(--line)" }}>
+                <div className="truncate flex-1" style={{ minWidth: 0 }}>
+                  {editingId === k.id ? (
+                    <input
+                      autoFocus
+                      value={editText}
+                      onChange={(e) => setEditText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") { e.preventDefault(); saveEdit(k.id, editText); }
+                        else if (e.key === "Escape") { setEditingId(null); setEditText(""); }
+                      }}
+                      onBlur={() => saveEdit(k.id, editText)}
+                      style={{
+                        width: "100%", padding: "3px 8px",
+                        background: "#0c0f15",
+                        border: "1px solid rgba(79,140,255,0.40)",
+                        borderRadius: 5,
+                        color: "#f4f6fb",
+                        fontSize: 13,
+                        outline: "none",
+                        fontFamily: "inherit",
+                      }}
+                    />
+                  ) : (
+                    <>
+                      <span
+                        onClick={() => startEdit(k.id, k.keyword)}
+                        style={{ cursor: "text" }}
+                        title="Click to edit"
+                      >
+                        {k.keyword}
+                      </span>
+                      <span className="ml-2 tag" style={{ fontSize: 9 }}>{k.source}</span>
+                    </>
+                  )}
                 </div>
-                <button className="text-xs" style={{ color: "var(--accent-red)" }} onClick={() => remove(k.id)}>remove</button>
+                {editingId === k.id ? (
+                  <button
+                    className="text-xs"
+                    style={{ color: "var(--muted)" }}
+                    onClick={() => { setEditingId(null); setEditText(""); }}
+                  >cancel</button>
+                ) : (
+                  <button className="text-xs" style={{ color: "var(--accent-red)" }} onClick={() => remove(k.id)}>remove</button>
+                )}
               </li>
             ))}
           </ul>
-        </details>
+        </div>
+      ) : (
+        <div className="text-sm muted mt-4" style={{ padding: "12px 0" }}>
+          No keywords yet. Add them above (paste, CSV upload, or run smart detection on the project header).
+        </div>
       )}
     </div>
   );

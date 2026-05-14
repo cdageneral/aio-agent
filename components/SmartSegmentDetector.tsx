@@ -101,6 +101,13 @@ export default function SmartSegmentDetector({
       if (!res.ok || !j.ok) throw new Error(j.error ?? "Detection failed");
       setSuggestion(j.result);
       setExcerpt(j.excerpt);
+      // v1.1.5: auto-apply detected seed keywords directly to the universe so
+      // they show up in the Keyword panel below — no chip preview, no extra
+      // click. The user reviews / edits / deletes them in the universe panel
+      // where keywords actually live.
+      if (j.result.seed_keywords?.length && onSeedKeywordsApplied) {
+        try { await onSeedKeywordsApplied(j.result.seed_keywords); } catch {}
+      }
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -114,6 +121,9 @@ export default function SmartSegmentDetector({
     if (!suggestion) return;
     setApplying(true);
     try {
+      // Apply the segment fields. Seed keywords were already pushed to the
+      // universe on detect (v1.1.5) so we only mirror them in segment state
+      // for downstream "what was suggested" memory — not for a second push.
       onChange({
         l1: suggestion.industry || null,
         l2: suggestion.category || null,
@@ -128,11 +138,6 @@ export default function SmartSegmentDetector({
       }
       if (suggestion.competitors?.length) {
         onCompetitorsSuggested?.(suggestion.competitors);
-      }
-      if (suggestion.seed_keywords?.length && onSeedKeywordsApplied) {
-        // Auto-seed the keyword universe — fire-and-forget but await so the
-        // user sees the loading state while keywords flow into the panel.
-        await onSeedKeywordsApplied(suggestion.seed_keywords);
       }
       setSuggestion(null);
       setExcerpt(null);
@@ -235,15 +240,9 @@ export default function SmartSegmentDetector({
           )}
 
           {suggestion.seed_keywords.length > 0 && (
-            <div style={{ marginTop: 12 }}>
-              <div style={{ fontSize: 10, color: "#8a93a6", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
-                Suggested seed keywords ({suggestion.seed_keywords.length})
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {suggestion.seed_keywords.map((k) => (
-                  <span key={k} style={{ fontSize: 11, padding: "3px 9px", borderRadius: 999, background: "rgba(255,255,255,0.05)", color: "#d6dbe6", border: "1px solid rgba(255,255,255,0.07)" }}>{k}</span>
-                ))}
-              </div>
+            <div style={{ marginTop: 10, fontSize: 11, color: "#84cc16", display: "inline-flex", alignItems: "center", gap: 5 }}>
+              <i className="ti ti-check" aria-hidden="true" style={{ fontSize: 12 }}></i>
+              Added {suggestion.seed_keywords.length} seed keyword{suggestion.seed_keywords.length === 1 ? "" : "s"} to the universe below — review, edit, or delete them in the Keyword Universe panel.
             </div>
           )}
 
@@ -280,7 +279,7 @@ export default function SmartSegmentDetector({
               {applying ? "Applying…" : "Use these"}
             </button>
             <span style={{ fontSize: 10.5, color: "#5a6478" }}>
-              Adds {suggestion.seed_keywords.length} keywords · queues {suggestion.competitors.length} competitor{suggestion.competitors.length === 1 ? "" : "s"}
+              Sets segment · queues {suggestion.competitors.length} competitor{suggestion.competitors.length === 1 ? "" : "s"}
               {suggestion.region_hint !== "unknown" && ` · sets region ${suggestion.region_hint.toUpperCase()}`}
             </span>
             <button
