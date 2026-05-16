@@ -56,6 +56,7 @@ export default function KeywordExplorer({
   projectBrand,
   clusterFilter,
   onClusterFilterChange,
+  refreshNonce = 0,
 }: {
   projectId: string;
   region: RegionMode;
@@ -63,6 +64,10 @@ export default function KeywordExplorer({
   /** Controlled cluster filter, owned by Dashboard. */
   clusterFilter: string;
   onClusterFilterChange: (v: string) => void;
+  /** v1.1.15: increments when the parent's metrics reload OR a refresh
+   *  completes. Forces this panel to refetch /keywords/detail so the
+   *  Drilldown reflects the just-landed snapshot. */
+  refreshNonce?: number;
 }) {
   const [data, setData] = useState<{ keywords: KeywordRow[]; tracked: any[] } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +85,7 @@ export default function KeywordExplorer({
     setLoading(false);
   }, [projectId, region]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshNonce]);
 
   const rows = useMemo(() => {
     if (!data) return [];

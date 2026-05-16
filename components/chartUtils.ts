@@ -35,6 +35,46 @@ export function filterByPeriod<T extends TimePoint>(series: T[], period: Period)
   return series.filter((s) => new Date(s.ran_at).getTime() >= cutoff);
 }
 
+/** v1.1.14: explicit date-range filter. `from` and `to` are ISO yyyy-MM-dd
+ *  strings (the format native <input type="date"> emits). Either bound can be
+ *  null to mean "open on that side." `to` is treated as end-of-day so a date
+ *  the user picked is inclusive. */
+export interface DateRange {
+  from: string | null;
+  to: string | null;
+}
+
+export function filterByDateRange<T extends TimePoint>(series: T[], range: DateRange): T[] {
+  if (!range.from && !range.to) return series;
+  const fromMs = range.from ? new Date(range.from + "T00:00:00").getTime() : -Infinity;
+  const toMs = range.to ? new Date(range.to + "T23:59:59.999").getTime() : Infinity;
+  return series.filter((s) => {
+    const t = new Date(s.ran_at).getTime();
+    return t >= fromMs && t <= toMs;
+  });
+}
+
+/** Convert a Period preset to a concrete DateRange anchored to today. Used by
+ *  the quick-preset chips in DateRangeSelector so picking "30 days" populates
+ *  the from/to inputs. */
+export function presetToRange(period: Period): DateRange {
+  const days = PERIOD_DAYS[period];
+  const today = isoDate(new Date());
+  if (days == null) return { from: null, to: null };
+  return { from: isoDate(new Date(Date.now() - days * 86_400_000)), to: today };
+}
+
+/** Format a Date as yyyy-MM-dd in local time (matching what <input type="date"> emits). */
+export function isoDate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/** Default range for fresh-mount: last 90 days through today. */
+export const DEFAULT_RANGE: DateRange = presetToRange("90d");
+
 /**
  * Compute % change between the latest snapshot and the snapshot taken
  * `daysAgo` days before it. Picks the closest prior snapshot at or before

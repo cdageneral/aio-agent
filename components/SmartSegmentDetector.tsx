@@ -46,6 +46,7 @@ export default function SmartSegmentDetector({
   onRegionHint,
   onCompetitorsSuggested,
   onSeedKeywordsApplied,
+  onAutoSave,
 }: {
   clientUrl: string;
   value: SegmentValue;
@@ -55,10 +56,14 @@ export default function SmartSegmentDetector({
   /** Called with the suggested seed keywords when user accepts. Dashboard
    *  uses this to POST them into the keyword universe immediately. */
   onSeedKeywordsApplied?: (seeds: string[]) => Promise<void> | void;
+  /** v1.1.13: called with the detected segment so the parent can persist it
+   *  to the database. Without this, a fresh detect would update UI state but
+   *  the user had to manually click "Save changes" to make it stick — easy
+   *  to miss. */
+  onAutoSave?: (seg: SegmentValue) => Promise<void> | void;
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [excerpt, setExcerpt] = useState<{ title: string; description: string; h1: string } | null>(null);
   const [editing, setEditing] = useState(false);
 
@@ -90,7 +95,6 @@ export default function SmartSegmentDetector({
     }
     setBusy(true);
     setErr(null);
-    setSuggestion(null);
     try {
       const res = await fetch("/api/detect-segment", {
         method: "POST",
@@ -99,15 +103,54 @@ export default function SmartSegmentDetector({
       });
       const j = await res.json();
       if (!res.ok || !j.ok) throw new Error(j.error ?? "Detection failed");
-      setSuggestion(j.result);
+      const result: Suggestion = j.result;
       setExcerpt(j.excerpt);
-      // v1.1.5: auto-apply detected seed keywords directly to the universe so
-      // they show up in the Keyword panel below — no chip preview, no extra
-      // click. The user reviews / edits / deletes them in the universe panel
-      // where keywords actually live.
-      if (j.result.seed_keywords?.length && onSeedKeywordsApplied) {
-        try { await onSeedKeywordsApplied(j.result.seed_keywords); } catch {}
+
+      // v1.1.13: auto-apply everything immediately. No more "Suggested segment"
+      // review card — the detected segment lands in the Current segment area
+      // and gets persisted to the database in one shot. Users were missing the
+      // "Use these" + "Save changes" two-step and ending up with empty state.
+
+      const nextSeg: SegmentValue = {
+        l1: result.industry || null,
+        l2: result.category || null,
+        l3: result.subcategory || null,
+        primary_product: result.primary_product || null,
+        seed_keywords: result.seed_keywords,
+        competitors: result.competitors,
+        confidence: result.confidence,
+      };
+      onChange(nextSeg);
+
+      // Region hint flows out so the parent can flip the region toggle.
+      if (result.region_hint && result.region_hint !== "unknown") {
+        onRegionHint?.(result.region_hint);
       }
+
+      // Competitor suggestions flow to the CompetitorPanel strip (existing path).
+      if (result.competitors?.length) {
+        onCompetitorsSuggested?.(result.competitors);
+      }
+
+      // Seed keywords flow into the keyword universe (existing v1.1.5 path).
+      if (result.seed_keywords?.length && onSeedKeywordsApplied) {
+        try { await onSeedKeywordsApplied(result.seed_keywords); } catch {}
+      }
+
+      // Persist segment fields to the database so the detection survives
+      // page reloads without the user clicking Save changes.
+      if (onAutoSave) {
+        try { await onAutoSave(nextSeg); } catch {}
+      }
+
+      // Build a short confirmation summary for the inline note (replaces the
+      // old "Suggested segment" review card).
+      setLastDetection({
+        when: Date.now(),
+        seedCount: result.seed_keywords?.length ?? 0,
+        compCount: result.competitors?.length ?? 0,
+        regionHint: result.region_hint,
+      });
     } catch (e: any) {
       setErr(e.message);
     } finally {
@@ -115,36 +158,8 @@ export default function SmartSegmentDetector({
     }
   }
 
-  const [applying, setApplying] = useState(false);
-
-  async function applySuggestion() {
-    if (!suggestion) return;
-    setApplying(true);
-    try {
-      // Apply the segment fields. Seed keywords were already pushed to the
-      // universe on detect (v1.1.5) so we only mirror them in segment state
-      // for downstream "what was suggested" memory — not for a second push.
-      onChange({
-        l1: suggestion.industry || null,
-        l2: suggestion.category || null,
-        l3: suggestion.subcategory || null,
-        primary_product: suggestion.primary_product || null,
-        seed_keywords: suggestion.seed_keywords,
-        competitors: suggestion.competitors,
-        confidence: suggestion.confidence,
-      });
-      if (suggestion.region_hint && suggestion.region_hint !== "unknown") {
-        onRegionHint?.(suggestion.region_hint);
-      }
-      if (suggestion.competitors?.length) {
-        onCompetitorsSuggested?.(suggestion.competitors);
-      }
-      setSuggestion(null);
-      setExcerpt(null);
-    } finally {
-      setApplying(false);
-    }
-  }
+  // v1.1.13: small in-memory marker for the inline "just detected" hint.
+  const [lastDetection, setLastDetection] = useState<{ when: number; seedCount: number; compCount: number; regionHint: string } | null>(null);
 
   function saveEdit() {
     onChange({
@@ -209,100 +224,28 @@ export default function SmartSegmentDetector({
         </div>
       )}
 
-      {/* Suggestion card — only when a fresh suggestion is pending */}
-      {suggestion && (
-        <div style={{ padding: "14px 16px", borderRadius: 12, background: "rgba(79,140,255,0.06)", border: "1px solid rgba(79,140,255,0.22)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-            <span style={{ fontSize: 10, color: "#4f8cff", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase" }}>Suggested segment</span>
-            <ConfidenceChip level={suggestion.confidence} />
-            {suggestion.region_hint !== "unknown" && (
-              <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 999, background: "rgba(255,184,70,0.16)", color: "#ffb846", fontWeight: 700, letterSpacing: "0.04em" }}>
-                region · {suggestion.region_hint.toUpperCase()}
-              </span>
-            )}
-          </div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: "#f4f6fb" }}>
-            {suggestion.industry} › {suggestion.category} › <span style={{ color: "#b6f53b" }}>{suggestion.subcategory}</span>
-          </div>
-          {suggestion.primary_product && (
-            <div style={{ fontSize: 12.5, color: "#8a93a6", marginTop: 4 }}>{suggestion.primary_product}</div>
-          )}
-
+      {/* v1.1.13: inline confirmation after auto-applied detection. The big
+          review card is gone — segment + competitors + keywords + region all
+          flow through automatically, the Current segment area above shows the
+          result, and this thin lime strip just acknowledges what happened. */}
+      {lastDetection && (
+        <div style={{ padding: "8px 12px", borderRadius: 8, background: "rgba(132,204,22,0.08)", border: "1px solid rgba(132,204,22,0.25)", fontSize: 12, color: "#d6dbe6", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <i className="ti ti-check" aria-hidden="true" style={{ fontSize: 13, color: "#84cc16" }}></i>
+          <span>
+            Detected and applied · <strong style={{ color: "#84cc16" }}>{lastDetection.seedCount}</strong> seed keyword{lastDetection.seedCount === 1 ? "" : "s"} added to universe
+            {lastDetection.compCount > 0 && <> · <strong style={{ color: "#ff5d9e" }}>{lastDetection.compCount}</strong> competitor{lastDetection.compCount === 1 ? "" : "s"} queued</>}
+            {lastDetection.regionHint !== "unknown" && <> · region <strong style={{ color: "#ffb846" }}>{lastDetection.regionHint.toUpperCase()}</strong></>}
+          </span>
           {excerpt?.title && (
-            <details style={{ marginTop: 10 }}>
+            <details style={{ marginLeft: "auto" }}>
               <summary style={{ fontSize: 11, color: "#5a6478", cursor: "pointer" }}>What Claude read</summary>
-              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "#11151d", border: "1px solid rgba(255,255,255,0.06)", fontSize: 11.5, color: "#d6dbe6", lineHeight: 1.55 }}>
+              <div style={{ marginTop: 6, padding: "8px 10px", borderRadius: 8, background: "#11151d", border: "1px solid rgba(255,255,255,0.06)", fontSize: 11.5, color: "#d6dbe6", lineHeight: 1.55, maxWidth: 460 }}>
                 <div><span style={{ color: "#5a6478" }}>title:</span> {excerpt.title}</div>
                 {excerpt.description && <div><span style={{ color: "#5a6478" }}>desc:</span> {excerpt.description}</div>}
                 {excerpt.h1 && <div><span style={{ color: "#5a6478" }}>h1:</span> {excerpt.h1}</div>}
               </div>
             </details>
           )}
-
-          {suggestion.seed_keywords.length > 0 && (
-            <div style={{ marginTop: 10, fontSize: 11, color: "#84cc16", display: "inline-flex", alignItems: "center", gap: 5 }}>
-              <i className="ti ti-check" aria-hidden="true" style={{ fontSize: 12 }}></i>
-              Added {suggestion.seed_keywords.length} seed keyword{suggestion.seed_keywords.length === 1 ? "" : "s"} to the universe below — review, edit, or delete them in the Keyword Universe panel.
-            </div>
-          )}
-
-          {suggestion.competitors.length > 0 && (
-            <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 10, color: "#8a93a6", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>
-                Suggested competitors ({suggestion.competitors.length}) <span style={{ color: "#5a6478", fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· verified domains shown below · one-click add in the Competitors panel</span>
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-                {suggestion.competitors.map((c) => (
-                  <span key={c.domain || c.name} style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11, padding: "3px 9px", borderRadius: 999, background: "rgba(255,93,158,0.14)", color: "#ff5d9e", fontWeight: 600 }}>
-                    {c.verified && <i className="ti ti-rosette-discount-check" style={{ fontSize: 13, color: "#b6f53b" }} aria-hidden="true"></i>}
-                    {c.name}
-                    {c.domain && <span style={{ color: "rgba(255,93,158,0.55)", fontWeight: 400 }}>{c.domain}</span>}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          <div style={{ display: "flex", gap: 8, marginTop: 14, alignItems: "center", flexWrap: "wrap" }}>
-            <button
-              onClick={applySuggestion}
-              disabled={applying}
-              style={{
-                padding: "8px 14px", borderRadius: 9,
-                background: applying ? "rgba(182,245,59,0.18)" : "#b6f53b",
-                color: "#06070b", fontSize: 13, fontWeight: 600, border: "none",
-                cursor: applying ? "wait" : "pointer",
-                display: "inline-flex", alignItems: "center", gap: 6,
-              }}
-            >
-              <i className={`ti ${applying ? "ti-loader-2" : "ti-check"}`} style={{ fontSize: 14 }} aria-hidden="true"></i>
-              {applying ? "Applying…" : "Use these"}
-            </button>
-            <span style={{ fontSize: 10.5, color: "#5a6478" }}>
-              Sets segment · queues {suggestion.competitors.length} competitor{suggestion.competitors.length === 1 ? "" : "s"}
-              {suggestion.region_hint !== "unknown" && ` · sets region ${suggestion.region_hint.toUpperCase()}`}
-            </span>
-            <button
-              onClick={() => {
-                setEditL1(suggestion.industry);
-                setEditL2(suggestion.category);
-                setEditL3(suggestion.subcategory);
-                setEditProduct(suggestion.primary_product);
-                setEditSeeds(suggestion.seed_keywords.join(", "));
-                setEditing(true);
-                setSuggestion(null);
-              }}
-              style={ghostBtnStyle()}
-            >
-              <i className="ti ti-edit" style={{ fontSize: 14 }} aria-hidden="true"></i>Edit
-            </button>
-            <button
-              onClick={() => { setSuggestion(null); setExcerpt(null); }}
-              style={{ padding: "8px 12px", borderRadius: 9, background: "transparent", color: "#8a93a6", fontSize: 13, fontWeight: 500, border: "1px solid rgba(255,255,255,0.10)", cursor: "pointer" }}
-            >
-              Skip
-            </button>
-          </div>
         </div>
       )}
 

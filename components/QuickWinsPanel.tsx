@@ -26,6 +26,7 @@ export default function QuickWinsPanel({
   clientBrand,
   clusterFilter,
   onClusterFilterChange,
+  refreshNonce = 0,
 }: {
   projectId: string;
   region: RegionMode;
@@ -33,6 +34,10 @@ export default function QuickWinsPanel({
   /** Controlled cluster filter — Dashboard owns this so clicking a cluster card pushes through here. */
   clusterFilter: string;
   onClusterFilterChange: (v: string) => void;
+  /** v1.1.15: increments when the parent's metrics reload OR a refresh
+   *  completes. Listening here forces a re-fetch so AIO Opportunities
+   *  reflects the just-landed snapshot instead of stale data. */
+  refreshNonce?: number;
 }) {
   const [wins, setWins] = useState<QuickWin[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -50,7 +55,7 @@ export default function QuickWinsPanel({
     setLoading(false);
   }, [projectId, region]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshNonce]);
 
   const clusterOptions = useMemo(() => {
     if (!wins) return { entries: [] as [string, number][], unclustered: 0 };

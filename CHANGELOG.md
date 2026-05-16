@@ -4,6 +4,123 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.16] — 2026-05-13
+
+Make the date-range inputs obviously visible in dark mode.
+
+### Fixed
+- **From / To date inputs were invisible.** v1.1.14 added them with native `<input type="date">` styling that blended into the dark canvas — users saw only the preset chips and didn't realize there were date fields they could click.
+
+### Changed
+- **Two-row layout.** Date inputs now sit on their own row with a "Custom range" label; preset chips sit below with a "Quick" label. Plenty of breathing room, both rows always visible.
+- **Inline calendar icon** inside each date input pill — a small blue calendar SVG that signals "click me, this is a date picker." Visible whether the user has interacted yet or not.
+- **Explicit blue-tinted borders** on the inputs (`rgba(79,140,255,0.30)`), explicit dark-mode background, 130px minimum width per input, larger padding. Inputs are now impossible to miss.
+- **"Custom range · active" indicator** when the user has dragged the inputs to a non-preset range, so they know the chart is filtered to their hand-picked window.
+
+### Notes
+- The date filter logic itself was already correct since v1.1.14 — both charts respect the range, both are inclusive on the bounds, MoM/YoY still compute against the full series. This release is purely visibility / discoverability.
+
+## [1.1.15] — 2026-05-13
+
+Two real bugs: AIO Opportunities + Drilldown showing stale data after refresh, and trash icon still missing on some browsers.
+
+### Fixed
+- **AIO Opportunities and Keyword Drilldown weren't refetching after a refresh completes.** Both panels had useEffect deps of just `[load]` (essentially `[projectId, region]`), so they only re-fetched when those changed. After a Refresh button click, Dashboard.load() refreshed the metrics payload (Story panel, pulse cards, clusters), but the two child panels stayed pointed at their pre-refresh fetch. User saw "no opportunities yet" / "no keywords" until clicking Refresh again.
+- **Same fix covers auto-cluster latency.** When auto-clustering completes ~3s after the keyword set changes, its `onChanged()` triggers Dashboard.load() — which now also bumps the nonce. So clusters appearing in the metrics payload also pulls fresh AIO Opportunities + Drilldown data in sync.
+
+### Added
+- **`refreshNonce` counter on Dashboard.** Increments after every refresh AND every successful metrics reload. Passed down to QuickWinsPanel and KeywordExplorer as a prop; they include it in their useEffect deps, so any nonce change forces a refetch.
+
+### Fixed (icon resilience)
+- **ProjectCard trash icon switched from Tabler webfont to inline SVG.** The Tabler CSS @import in globals.css usually loads fine, but if the CDN is slow, blocked by a corporate proxy, or the browser cached a 404, the trash glyph would render as an empty red square — the click handler worked, just the icon was invisible. Inline SVG renders regardless of webfont status; the button is now guaranteed visible in every browser session.
+
+### Notes
+- Refresh flow end-to-end now: click Refresh → SerpAPI runs → metrics reload → nonce bumps → AIO Opportunities + Drilldown refetch automatically → seconds later auto-cluster completes → metrics reload again → cluster cards appear AND Opportunities/Drilldown refetch one more time. Everything settles in one user click.
+- Other icons (refresh button, edit pencils, info circles) still rely on the Tabler webfont since they're cosmetic-only. The trash icon got the SVG treatment specifically because losing the delete affordance is a much worse user experience than losing a refresh icon.
+
+## [1.1.14] — 2026-05-13
+
+Calendar date-range picker for the AIO Trends + Acquisition Rate charts.
+
+### Added
+- **From / To date inputs** above the chart pair. Pick any two dates and both charts immediately filter to that window. Native `<input type="date">` controls, styled for the dark theme via `color-scheme: dark`, so they pop up the platform date picker on click.
+- **Quick preset chips** next to the inputs: 30 days · 90 days · 6 months · 1 year · All time. Clicking one populates From and To to that range ending today. The active preset highlights in blue so you know what's currently selected.
+
+### Changed
+- `chartUtils.ts` gained `DateRange` type, `filterByDateRange()` function, `presetToRange()` helper, `isoDate()` formatter, and `DEFAULT_RANGE` (last 90 days).
+- `GrowthChart` now takes a `range: DateRange` prop instead of `period: Period`.
+- `AcquisitionChart` same change.
+- `Dashboard` state changed from `const [period, setPeriod]` to `const [range, setRange]`, default = last 90 days.
+- `PeriodSelector.tsx` rewritten as the date-range picker (file name preserved so existing imports keep working).
+
+### Notes
+- The existing `filterByPeriod` / `Period` types are still exported from chartUtils for any other code that uses them, but Dashboard now uses date-range exclusively.
+- MoM and YoY badges on the AIO Trends chart still compute against the **full** series, not the filtered slice, so deltas stay meaningful even when you zoom into a narrow window.
+
+## [1.1.13] — 2026-05-13
+
+Auto-apply and auto-persist detected segment on Detect — no more "Not detected yet" after detection.
+
+### Fixed
+- **Detection result wasn't sticking.** The flow was: click Detect → see a big "Suggested segment" review card → click "Use these" → then click "Save changes" to persist. Users were missing one or both of those steps, ending up with "Not detected yet" displayed and no segment saved. Now detection auto-applies AND auto-saves in a single Detect click.
+
+### Changed
+- **SmartSegmentDetector.detect()** now applies the segment, region hint, competitor suggestions, and seed keywords inline as soon as the API response lands. The "Current segment" area at the top of the panel updates immediately to show the detected industry / category / subcategory with confidence chip.
+- **New `onAutoSave` callback** on SmartSegmentDetector — ProjectHeader provides a handler that PATCHes the project with the segment fields (segment_l1/l2/l3, primary_product, custom_seed_keywords, detection_confidence). Persisted before the user can navigate away or reload.
+- **Removed the bulky "Suggested segment" review card.** Replaced with a thin lime confirmation strip below the Current segment area that summarizes what just happened ("Detected and applied · N seed keywords added · M competitors queued · region US"). The "What Claude read" excerpt is preserved as a collapsible inside the strip for debugging.
+- **Removed the dead `applySuggestion()` function and `suggestion` / `applying` state** since the manual two-step flow is gone.
+
+### Notes
+- Re-detect still works the same way — runs the API, auto-applies, auto-persists, replacing whatever was there. The confirmation strip refreshes with the new detection time.
+- The "Save changes" button on ProjectHeader still exists for URL / brand / region edits that aren't detection-driven.
+
+## [1.1.12] — 2026-05-13
+
+Compact density for the Competitor and Keyword lists.
+
+### Changed
+- **Competitor list rows** — collapsed from "stacked brand-name-then-domain" two-line layout to a single inline row: brand name (12px, weight 600) and domain (10.5px muted) on one line, "remove" button on the right. Padding dropped from `py-2 px-3` to `5px 9px`. Row gap reduced from 8px to 3px. ~3x more competitors fit on screen.
+- **Keyword list rows** — matched density. 12px keyword text, 9px source badge, 4px vertical padding, 1.3 line-height. Single row per keyword with the source chip inline next to the keyword text.
+- **Empty-state copy** on the keyword list updated to mention the four ways to add keywords (type, paste with commas, CSV upload, or smart detection).
+
+### Notes
+- Pure visual tightening. No logic changes — inline edit still works (click keyword text), remove still works, source badges still show, auto-cluster still fires on changes.
+
+## [1.1.11] — 2026-05-13
+
+Streamline the keyword input — type-and-go one-off add, drop Volumes CSV, snappier auto-cluster.
+
+### Changed
+- **Single-line input replaces the multi-line textarea.** Type one keyword, hit Enter, done. The same field still accepts comma-separated values for "let me add a few at once" — no functionality lost, just a much faster path for the common case of "I want to add one keyword."
+- **Auto-cluster debounce reduced from 8s to 3s.** Single-keyword adds now trigger clustering in 3 seconds instead of 8. Still long enough that a quick paste of 10-15 keywords coalesces into one cluster call instead of N — bulk add stays cheap.
+
+### Removed
+- **Volumes CSV upload link.** Not used in current workflow; the upload function is preserved in code in case anything else calls it, just removed from the UI.
+
+### Confirmed (no code change needed)
+- Auto-clustering fires **on initial keyword load** when any keyword lacks a `cluster_label` (per the signature-based check in v1.1.6).
+- Auto-clustering fires **when a new keyword is added** (signature changes, debounce schedules cluster).
+- Auto-clustering fires **when a keyword is edited** (delete + add-as-manual changes the signature).
+- Auto-clustering fires **when a keyword is deleted** (signature changes).
+- Auto-clustering is paused during refresh (v1.1.10 fix) so it doesn't race the SerpAPI batch.
+
+### Notes
+- Pure UI change. No API contract changes, no schema changes.
+- The CSV upload button now sits inline next to the input as a small bordered button, making the row a single horizontal strip: input + Keywords CSV + Add.
+
+## [1.1.10] — 2026-05-13
+
+Fix the "I had to click Refresh several times before data showed up" bug. Three race-condition fixes.
+
+### Fixed
+- **Auto-clustering raced the refresh.** Right after a user created a project, the dashboard would auto-cluster the just-inserted seed keywords on an 8-second debounce. If the user hit Refresh inside that window (which most users do), the cluster API call's `onChanged()` refetch raced against the refresh's own `load()`. Whichever resolved last wrote to the dashboard's `data` state — sometimes that was the cluster's metrics call which fired BEFORE the refresh's serp_results had finished writing. Result: refresh "succeeded" but the dashboard showed empty/partial data, prompting the user to click Refresh again. **Fix:** pass `refreshing` from Dashboard down to KeywordPanel; auto-cluster useEffect short-circuits whenever a refresh is in flight, and re-checks `refreshing` right before the 8-second timer fires.
+- **Region inference raced the first metrics load.** Dashboard's `load()` used `data === null` as a "first time" gate, but `data` is a closure-captured value that could mis-evaluate during the React render cycle. If a project's saved regions differed from the default "us", the region snap fired a second `load()` while the first was still in flight; whichever resolved second clobbered the state. **Fix:** replace the `data === null` check with a `useRef<boolean>` flag (`didInferRegionRef.current`) that fires exactly once on the very first metrics load.
+- **Refresh button had no double-click guard.** Rapid clicks (or simultaneous clicks from the header button + FirstRefreshBanner) could fire two parallel `POST /refresh` requests. Each created a separate snapshot row and each called `load()` after completing; the two `load()` calls raced each other. **Fix:** `if (refreshing) return;` as the first line of `onRefresh`.
+
+### Notes
+- All three fixes are client-side only — no API contract changes, no schema changes.
+- The lower-priority issue of "stuck `status='running'` snapshots from soft serverless timeouts" is a separate follow-up that requires UI for surfacing stale runs (not addressed here).
+
 ## [1.1.9] — 2026-05-13
 
 Load the Tabler Icons font (every icon in the app was invisible) and remove the duplicate "+ New project" button from the global nav header.

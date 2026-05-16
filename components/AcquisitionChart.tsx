@@ -1,24 +1,26 @@
 "use client";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
-import { Period, filterByPeriod, fmtDate } from "./chartUtils";
+import { DateRange, filterByDateRange, fmtDate } from "./chartUtils";
 
 const PALETTE = ["#ff5d9e", "#ffb846", "#b6f53b", "#25e0ce", "#a878ff", "#ff7a59", "#ffd84d", "#7ad7ff"];
 
 /**
  * Acquisition-rate trend per tracked brand. Y-axis is citation rate (% of
  * triggered AIOs the brand was cited in). Client is highlighted in brand blue
- * with a heavier stroke; competitors cycle through the palette.
+ * with a heavier stroke; competitors cycle through the palette. v1.1.14:
+ * switched from preset Period to explicit DateRange so it shares the same
+ * calendar selector as the AIO Trends chart.
  */
 export default function AcquisitionChart({
   series,
-  period,
+  range,
   project,
 }: {
   series: any[];
-  period: Period;
+  range: DateRange;
   project: any;
 }) {
-  const filtered = filterByPeriod(series, period);
+  const filtered = filterByDateRange(series, range);
 
   if (!filtered || filtered.length === 0) {
     return <div className="text-sm text-gray-500">No snapshots in this range.</div>;

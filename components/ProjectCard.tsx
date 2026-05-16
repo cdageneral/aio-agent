@@ -121,7 +121,15 @@ export default function ProjectCard({ project }: { project: ProjectListItem }) {
         onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,100,100,0.18)"; (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
         onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,100,100,0.06)"; (e.currentTarget as HTMLButtonElement).style.opacity = "0.7"; }}
       >
-        <i className="ti ti-trash" style={{ fontSize: 14 }} aria-hidden="true"></i>
+        {/* v1.1.15: inline SVG trash icon — guaranteed to render even if the
+            Tabler webfont fails to load (CDN hiccup, blocked, or cached miss). */}
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <polyline points="3 6 5 6 21 6" />
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+          <path d="M10 11v6" />
+          <path d="M14 11v6" />
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+        </svg>
       </button>
 
       {confirming && (

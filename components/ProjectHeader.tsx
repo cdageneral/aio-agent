@@ -138,6 +138,28 @@ export default function ProjectHeader({
           onRegionHint={(r) => onRegionChange(r)}
           onCompetitorsSuggested={onCompetitorsSuggested}
           onSeedKeywordsApplied={onSeedKeywordsApplied}
+          // v1.1.13: persist detection result immediately so the segment shows
+          // up on the next page load instead of disappearing back into
+          // "Not detected yet." The detector calls this with the just-applied
+          // segment fields; we PATCH the project record directly without
+          // waiting for the user to click "Save changes."
+          onAutoSave={async (nextSeg) => {
+            try {
+              await fetch(`/api/projects/${project.id}`, {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  segment_l1: nextSeg.l1,
+                  segment_l2: nextSeg.l2,
+                  segment_l3: nextSeg.l3,
+                  primary_product: nextSeg.primary_product ?? null,
+                  custom_seed_keywords: nextSeg.seed_keywords ?? [],
+                  detection_confidence: nextSeg.confidence ?? null,
+                }),
+              });
+              onSaved();
+            } catch { /* non-fatal — local state still has the segment */ }
+          }}
         />
       </div>
 

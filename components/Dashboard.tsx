@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ProjectHeader from "./ProjectHeader";
 import CompetitorPanel from "./CompetitorPanel";
 import KeywordPanel from "./KeywordPanel";
@@ -10,7 +10,7 @@ import RegionSelector, { RegionMode, regionsForMode } from "./RegionSelector";
 import StoryPanel from "./StoryPanel";
 import ShareOfVoiceHero from "./ShareOfVoiceHero";
 import FirstRefreshBanner from "./FirstRefreshBanner";
-import { Period } from "./chartUtils";
+import { DateRange, DEFAULT_RANGE } from "./chartUtils";
 import type { SuggestedCompetitor } from "./SmartSegmentDetector";
 import CompetitorTable from "./CompetitorTable";
 import KeywordExplorer from "./KeywordExplorer";
@@ -43,7 +43,12 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [refreshMsg, setRefreshMsg] = useState<string | null>(null);
-  const [period, setPeriod] = useState<Period>("90d");
+  const [range, setRange] = useState<DateRange>(DEFAULT_RANGE);
+  // v1.1.15: monotonically increments after every refresh / auto-cluster /
+  // significant project mutation. Child panels (QuickWinsPanel, KeywordExplorer)
+  // include it in their useEffect deps so they refetch their data without
+  // needing a manual reload.
+  const [refreshNonce, setRefreshNonce] = useState(0);
   const [region, setRegion] = useState<RegionMode>("us");
   // Suggested competitors flow from the SmartSegmentDetector down to the
   // CompetitorPanel. Transient — survives in-session, cleared once added or
@@ -53,6 +58,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   // Drilldown panels. Clicking a card sets it; the dropdowns in the lower
   // panels read it. "all" disables filtering.
   const [clusterFilter, setClusterFilter] = useState<string>("all");
+
+  // v1.1.10: gate region inference so it only fires on the very first metrics
+  // load. The previous `data === null` check was a stale closure that could
+  // mis-fire after onChanged() refetches and cause double-loads to race.
+  const didInferRegionRef = useRef(false);
 
   function pickCluster(name: string) {
     // Toggle off if user re-clicks the active card.
@@ -71,16 +81,28 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     const res = await fetch(`/api/projects/${projectId}/metrics?${params.toString()}`, { cache: "no-store" });
     const j = await res.json();
     setData(j);
-    // On first load, snap region to whatever the project actually has configured.
-    if (j?.project?.regions) {
+    // v1.1.10: Snap region to whatever the project actually has configured —
+    // but only ONCE, on the very first metrics load. Using a useRef flag
+    // avoids the stale-closure race where `data === null` could mis-evaluate
+    // mid-flight and trigger a second load with the new region while the
+    // first is still in flight (causing stale data to land last).
+    if (!didInferRegionRef.current && j?.project?.regions) {
+      didInferRegionRef.current = true;
       const inferred = defaultMode(j.project.regions);
-      if (inferred !== region && data === null) setRegion(inferred);
+      if (inferred !== region) setRegion(inferred);
     }
     // Hydrate suggested competitors from the persisted JSONB column. This is
     // what lets suggestions survive a page reload until the user resolves them.
     if (Array.isArray(j?.project?.suggested_competitors)) {
       setSuggestedCompetitors(j.project.suggested_competitors);
     }
+    // v1.1.15: signal downstream panels (Quick Wins, Drilldown) to refetch
+    // whenever the metrics payload changes. This catches the case where
+    // auto-clustering completes via onChanged() and the cluster cards appear
+    // — at the same moment, the per-keyword data the lower panels show needs
+    // to be re-fetched so AIO Opportunities and the Drilldown reflect the
+    // freshest snapshot without requiring another manual click.
+    setRefreshNonce((n) => n + 1);
     setLoading(false);
   }, [projectId, region]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -119,6 +141,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   useEffect(() => { load(); }, [load]);
 
   async function onRefresh() {
+    // v1.1.10: hard guard against double-click — without this, rapid clicks
+    // (or simultaneous clicks from ProjectHeader + FirstRefreshBanner) fire
+    // two parallel POST /refresh requests that create separate snapshot rows
+    // and race each other's load() calls.
+    if (refreshing) return;
     setRefreshing(true);
     setRefreshMsg(null);
     try {
@@ -127,6 +154,9 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       if (!res.ok) throw new Error(j.error ?? "Refresh failed");
       setRefreshMsg(`Snapshot saved — ${j.aios_triggered} AIO(s) detected${j.failed ? `, ${j.failed} errored` : ""}.`);
       await load();
+      // v1.1.15: nudge child panels (Quick Wins, Drilldown) so they refetch
+      // their own data with the new snapshot rather than show stale state.
+      setRefreshNonce((n) => n + 1);
     } catch (e: any) {
       setRefreshMsg(`Error: ${e.message}`);
     } finally {
@@ -170,7 +200,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           onSuggestionAdded={(domain) => persistSuggestions(suggestedCompetitors.filter((c) => c.domain !== domain))}
           onSuggestionDismissed={(domain) => persistSuggestions(suggestedCompetitors.filter((c) => c.domain !== domain))}
         />
-        <KeywordPanel projectId={projectId} onChanged={load} />
+        <KeywordPanel projectId={projectId} onChanged={load} refreshing={refreshing} />
       </section>
 
       <FirstRefreshBanner
@@ -220,18 +250,18 @@ export default function Dashboard({ projectId }: { projectId: string }) {
             <h2 className="h2">AIO trends</h2>
             <p className="text-xs muted mt-0.5">{series.length} snapshot{series.length === 1 ? "" : "s"} · timeline applies to both charts</p>
           </div>
-          <PeriodSelector value={period} onChange={setPeriod} />
+          <PeriodSelector value={range} onChange={setRange} />
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="surface-2 p-4">
             <div className="text-sm font-semibold">AIOs triggered</div>
             <p className="text-xs muted mb-2">How often Google is surfacing an AIO across tracked queries — market volume, not brand-specific.</p>
-            <GrowthChart series={series} period={period} />
+            <GrowthChart series={series} range={range} />
           </div>
           <div className="surface-2 p-4">
             <div className="text-sm font-semibold">Acquisition rate</div>
             <p className="text-xs muted mb-2">Citation rate over time — {project.brand_name} vs tracked competitors.</p>
-            <AcquisitionChart series={series} period={period} project={project} />
+            <AcquisitionChart series={series} range={range} project={project} />
           </div>
         </div>
       </section>
@@ -323,6 +353,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           clientBrand={project.brand_name}
           clusterFilter={clusterFilter}
           onClusterFilterChange={setClusterFilter}
+          refreshNonce={refreshNonce}
         />
       </section>
 
@@ -337,6 +368,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           projectBrand={project.brand_name}
           clusterFilter={clusterFilter}
           onClusterFilterChange={setClusterFilter}
+          refreshNonce={refreshNonce}
         />
       </section>
 

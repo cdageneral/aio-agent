@@ -167,15 +167,32 @@ export default function CompetitorPanel({
         <input className="input sm:col-span-4" placeholder="Aliases (comma-separated, optional)" value={aliases} onChange={(e) => setAliases(e.target.value)} />
       </form>
 
-      <ul className="mt-4 space-y-2">
-        {competitors.length === 0 && <li className="text-sm muted">No competitors yet.</li>}
+      {/* v1.1.12: compact one-line-per-row density. Brand + domain inline,
+          tight vertical padding, matched to the keyword list's density. */}
+      <ul className="mt-3" style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+        {competitors.length === 0 && <li className="text-xs muted">No competitors yet.</li>}
         {competitors.map((c) => (
-          <li key={c.id} className="flex items-center justify-between text-sm rounded-lg px-3 py-2" style={{ background: "var(--surface-2)", border: "1px solid var(--line)" }}>
-            <div>
-              <div className="font-medium">{c.brand_name}</div>
-              <div className="text-xs muted">{c.domain}</div>
+          <li
+            key={c.id}
+            className="flex items-center justify-between gap-3"
+            style={{
+              padding: "5px 9px",
+              borderRadius: 6,
+              background: "var(--surface-2)",
+              border: "1px solid var(--line)",
+              fontSize: 12,
+              lineHeight: 1.3,
+            }}
+          >
+            <div style={{ minWidth: 0, display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 600, color: "var(--text)" }}>{c.brand_name}</span>
+              <span style={{ fontSize: 10.5, color: "var(--muted)" }}>{c.domain}</span>
             </div>
-            <button className="text-xs" style={{ color: "var(--accent-red)" }} onClick={() => remove(c.id)}>remove</button>
+            <button
+              className="text-[10.5px]"
+              style={{ color: "var(--accent-red)", flexShrink: 0 }}
+              onClick={() => remove(c.id)}
+            >remove</button>
           </li>
         ))}
       </ul>

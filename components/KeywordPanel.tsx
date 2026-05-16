@@ -6,7 +6,7 @@ type ClusterSummary = { name: string; description: string; count: number };
 
 type Keyword = { id: string; keyword: string; source: string; cluster_label?: string | null };
 
-export default function KeywordPanel({ projectId, onChanged }: { projectId: string; onChanged: () => void }) {
+export default function KeywordPanel({ projectId, onChanged, refreshing = false }: { projectId: string; onChanged: () => void; refreshing?: boolean }) {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [max, setMax] = useState(500);
   const [busy, setBusy] = useState(false);
@@ -49,6 +49,12 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
   useEffect(() => {
     if (keywords.length < 5) return;
 
+    // v1.1.10: never auto-cluster while a refresh is in flight. The cluster
+    // API + its onChanged() refetch was racing the refresh's own load() and
+    // landing stale data on screen. Pausing during refresh means the user has
+    // to click Refresh only once instead of two or three times.
+    if (refreshing) return;
+
     // Build a stable signature: sorted lowercase keyword strings joined.
     // Same strings → same cluster result, regardless of array reference or order.
     const sig = keywords.map((k) => k.keyword.toLowerCase().trim()).sort().join("|");
@@ -65,9 +71,13 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
       return;
     }
 
-    // Otherwise schedule a debounced cluster — long enough that bulk pastes
-    // and detect-driven seed flushes don't thrash the Claude API.
+    // v1.1.11: 3s debounce (was 8s). Short enough that single-keyword adds
+    // feel immediate; long enough to coalesce a quick paste of 5-15 keywords
+    // into one cluster call instead of N.
     const timer = setTimeout(async () => {
+      // Re-check refreshing right before firing — user may have hit Refresh
+      // during the debounce window.
+      if (refreshing) return;
       setClustering(true);
       try {
         const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
@@ -79,10 +89,10 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
         }
       } catch { /* swallow — auto-cluster shouldn't surface errors */ }
       finally { setClustering(false); }
-    }, 8000);
+    }, 3000);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keywords, projectId]);
+  }, [keywords, projectId, refreshing]);
 
   async function submit() {
     setBusy(true);
@@ -219,49 +229,56 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
         {Object.entries(sourcesCount).map(([k, v]) => <span key={k} className="tag">{k}: {v}</span>)}
       </div>
 
-      {/* v1.1.7: streamlined input — single textarea for manual paste plus
-          inline CSV uploads. Detected keywords flow in automatically via the
-          ProjectHeader's Detect button, so the panel only needs manual + CSV. */}
+      {/* v1.1.11: single-line input for one-off keyword adds. Enter submits;
+          comma-separated values still work for adding 2-3 at once. Bulk CSV
+          upload sits next to it for true bulk imports. Volumes CSV removed —
+          not used in the current workflow. */}
       <div className="mt-3">
-        <textarea
-          className="input"
-          style={{ minHeight: 76 }}
-          placeholder="Paste keywords here — one per line or comma-separated."
-          value={manualText}
-          onChange={(e) => setManualText(e.target.value)}
-        />
-        <div className="flex items-center justify-between flex-wrap gap-2 mt-2">
-          <div className="flex items-center gap-3 text-[11px]">
-            <label className="cursor-pointer hover:text-white transition" style={{ color: "var(--muted)" }}>
-              <i className="ti ti-upload" style={{ fontSize: 12, marginRight: 3, verticalAlign: -1 }} aria-hidden="true"></i>
-              Keywords CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCsv(f); }}
-              />
-            </label>
-            <label className="cursor-pointer hover:text-white transition" style={{ color: "#ffb846" }}>
-              <i className="ti ti-chart-bar" style={{ fontSize: 12, marginRight: 3, verticalAlign: -1 }} aria-hidden="true"></i>
-              Volumes CSV
-              <input
-                type="file"
-                accept=".csv,text/csv"
-                className="hidden"
-                onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadVolumes(f); }}
-              />
-            </label>
-          </div>
-          <button style={primaryBtnStyle(busy || !manualText.trim())} disabled={busy || !manualText.trim()} onClick={submit}>Add</button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            className="input"
+            style={{ flex: 1, minWidth: 200 }}
+            placeholder="Type a keyword and press Enter — or paste several separated by commas."
+            value={manualText}
+            onChange={(e) => setManualText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && manualText.trim() && !busy) {
+                e.preventDefault();
+                submit();
+              }
+            }}
+          />
+          <label
+            className="cursor-pointer hover:text-white transition inline-flex items-center"
+            style={{ color: "var(--muted)", fontSize: 11, padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.10)", whiteSpace: "nowrap" }}
+            title="Bulk-import from a CSV file (one keyword per row)"
+          >
+            <i className="ti ti-upload" style={{ fontSize: 12, marginRight: 4 }} aria-hidden="true"></i>
+            Keywords CSV
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCsv(f); }}
+            />
+          </label>
+          <button
+            style={primaryBtnStyle(busy || !manualText.trim())}
+            disabled={busy || !manualText.trim()}
+            onClick={submit}
+          >Add</button>
         </div>
       </div>
 
       {msg && <div className="mt-2 text-[11px] muted">{msg}</div>}
 
-      {/* v1.1.5: Auto-clustering status. Clustering fires automatically when
-          the universe size changes (debounced 8s, minimum 5 keywords). The
-          user no longer needs to click anything to trigger it. */}
+      {/* Auto-clustering status. Clustering fires automatically:
+          - on initial load if any keyword lacks a cluster_label
+          - whenever a keyword is added, edited, or deleted
+          - debounced 3s so quick bulk adds coalesce into one call
+          - paused while a refresh is in flight (avoid the race in v1.1.10)
+          Minimum 5 keywords. */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#a878ff", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 5 }}>
@@ -281,15 +298,21 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
       </div>
 
       {keywords.length > 0 ? (
-        <div className="mt-4">
+        <div className="mt-3">
           <div className="flex items-baseline justify-between mb-2">
             <div className="text-xs muted">Keywords ({keywords.length})</div>
             <div className="text-[10px] dim">Click any keyword to edit · click remove to delete</div>
           </div>
-          <ul className="text-sm" style={{ maxHeight: 320, overflowY: "auto", borderTop: "1px solid var(--line)" }}>
+          {/* v1.1.12: compact density — one line per row, tight padding, smaller
+              source badge. Matches the CompetitorPanel row density. */}
+          <ul style={{ maxHeight: 320, overflowY: "auto", borderTop: "1px solid var(--line)", fontSize: 12 }}>
             {keywords.map((k) => (
-              <li key={k.id} className="flex items-center justify-between py-1.5 gap-2" style={{ borderBottom: "1px solid var(--line)" }}>
-                <div className="truncate flex-1" style={{ minWidth: 0 }}>
+              <li
+                key={k.id}
+                className="flex items-center justify-between gap-2"
+                style={{ padding: "4px 0", borderBottom: "1px solid var(--line)", lineHeight: 1.3 }}
+              >
+                <div className="truncate" style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "baseline", gap: 7 }}>
                   {editingId === k.id ? (
                     <input
                       autoFocus
@@ -301,12 +324,12 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
                       }}
                       onBlur={() => saveEdit(k.id, editText)}
                       style={{
-                        width: "100%", padding: "3px 8px",
+                        width: "100%", padding: "2px 7px",
                         background: "#0c0f15",
                         border: "1px solid rgba(79,140,255,0.40)",
                         borderRadius: 5,
                         color: "#f4f6fb",
-                        fontSize: 13,
+                        fontSize: 12,
                         outline: "none",
                         fontFamily: "inherit",
                       }}
@@ -315,31 +338,35 @@ export default function KeywordPanel({ projectId, onChanged }: { projectId: stri
                     <>
                       <span
                         onClick={() => startEdit(k.id, k.keyword)}
-                        style={{ cursor: "text" }}
+                        style={{ cursor: "text", color: "var(--text)" }}
                         title="Click to edit"
                       >
                         {k.keyword}
                       </span>
-                      <span className="ml-2 tag" style={{ fontSize: 9 }}>{k.source}</span>
+                      <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, background: "rgba(255,255,255,0.04)", color: "var(--muted)" }}>{k.source}</span>
                     </>
                   )}
                 </div>
                 {editingId === k.id ? (
                   <button
-                    className="text-xs"
-                    style={{ color: "var(--muted)" }}
+                    className="text-[10.5px]"
+                    style={{ color: "var(--muted)", flexShrink: 0 }}
                     onClick={() => { setEditingId(null); setEditText(""); }}
                   >cancel</button>
                 ) : (
-                  <button className="text-xs" style={{ color: "var(--accent-red)" }} onClick={() => remove(k.id)}>remove</button>
+                  <button
+                    className="text-[10.5px]"
+                    style={{ color: "var(--accent-red)", flexShrink: 0 }}
+                    onClick={() => remove(k.id)}
+                  >remove</button>
                 )}
               </li>
             ))}
           </ul>
         </div>
       ) : (
-        <div className="text-sm muted mt-4" style={{ padding: "12px 0" }}>
-          No keywords yet. Add them above (paste, CSV upload, or run smart detection on the project header).
+        <div className="text-xs muted mt-3" style={{ padding: "10px 0" }}>
+          No keywords yet. Add them above (type one, paste several with commas, upload a CSV, or run smart detection on the project header).
         </div>
       )}
     </div>

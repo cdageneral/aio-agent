@@ -1,17 +1,18 @@
 "use client";
 import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from "recharts";
-import { Period, filterByPeriod, periodGrowth, fmtPctSigned, fmtDate } from "./chartUtils";
+import { DateRange, filterByDateRange, periodGrowth, fmtPctSigned, fmtDate } from "./chartUtils";
 
 /**
  * Volume-only AIO trend chart. Plots:
  *   - total AIOs triggered across the full keyword universe (market)
  *   - total AIOs triggered across the client's organic footprint
  *
- * Brand acquisition lives in AcquisitionChart. The shared `period` prop
- * drives both charts so the timeline picker stays in sync.
+ * Brand acquisition lives in AcquisitionChart. The shared `range` prop drives
+ * both charts so the date-range picker stays in sync. v1.1.14: switched from
+ * preset Period to explicit DateRange.
  */
-export default function GrowthChart({ series, period }: { series: any[]; period: Period }) {
-  const filtered = filterByPeriod(series, period);
+export default function GrowthChart({ series, range }: { series: any[]; range: DateRange }) {
+  const filtered = filterByDateRange(series, range);
 
   if (!filtered || filtered.length === 0) {
     return <div className="text-sm text-gray-500">No snapshots in this range.</div>;
