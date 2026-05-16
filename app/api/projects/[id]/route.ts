@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { revalidatePath } from "next/cache";
 import { deleteProject, getProject, updateProject } from "@/lib/db";
 import { normalizeDomain } from "@/lib/domain";
 
@@ -38,11 +39,22 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
 export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {
   // v1.1.18: report row-count and surface SQL errors so a "delete didn't
   // delete" symptom (modal closes, but project reappears) is diagnosable.
+  // v1.1.19: always revalidate the / and project routes, even on the 0-rows
+  // path. The 0-rows case usually means the UI was rendering a cached row
+  // that no longer exists in the DB — revalidating forces the next render
+  // to refetch and the ghost row will disappear.
   try {
     const deleted = await deleteProject(ctx.params.id);
+    // Bust the projects-list cache regardless of outcome.
+    try { revalidatePath("/"); } catch {}
+    try { revalidatePath(`/projects/${ctx.params.id}`); } catch {}
     if (deleted === 0) {
       return NextResponse.json(
-        { ok: false, deleted: 0, error: "No project matched that ID (already deleted, or wrong record?)" },
+        {
+          ok: false,
+          deleted: 0,
+          error: "No project matched that ID — the list was serving a stale cache. Reload (Cmd+Shift+R on Mac, Ctrl+F5 on Windows) and the ghost row should disappear.",
+        },
         { status: 404 },
       );
     }

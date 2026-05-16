@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.19] — 2026-05-13
+
+Bust the Next.js full-route cache after a delete attempt — ghost projects disappear.
+
+### Root cause confirmed
+v1.1.18's diagnostic surfaced "No project matched that ID" — meaning the DELETE SQL ran against a project that was no longer in the database. The list was showing a **ghost row** rendered from Next.js's full-route cache for `/` (which `export const dynamic = "force-dynamic"` should disable but in practice can still hold stale HTML between sessions).
+
+### Fixed
+- **`DELETE /api/projects/[id]` now calls `revalidatePath("/")` and `revalidatePath("/projects/[id]")` on both success AND 0-rows paths.** The next page render under either path will refetch fresh from `listProjects` instead of serving the cached HTML.
+- **Client treats 0-rows as soft-success.** If the SQL matched zero rows, the row is already gone — the user's intent is satisfied. ProjectCard closes the modal and hard-navigates to `/` exactly like the genuine-success path, so the user lands on an accurate list immediately instead of staring at a "ghost" error.
+
+### Notes
+- Combined v1.1.18 + v1.1.19: any future delete click ends with the projects list correctly reflecting what's in the database, regardless of whether the SQL actually deleted a row or the row was already gone.
+- Real errors (5xx, network failures, FK violations on cascade columns) still surface in the modal with a meaningful message.
+
 ## [1.1.18] — 2026-05-13
 
 Harden project delete so it actually deletes and the list re-renders without the row.

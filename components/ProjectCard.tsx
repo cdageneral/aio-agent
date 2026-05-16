@@ -60,23 +60,22 @@ export default function ProjectCard({ project }: { project: ProjectListItem }) {
     setDeleting(true);
     setError(null);
     try {
-      // v1.1.18: cache-bust the DELETE so no intermediary caches it; require
-      // the server to return ok AND deleted >= 1 before declaring success.
+      // v1.1.18: cache-bust the DELETE so no intermediary caches it.
       const res = await fetch(`/api/projects/${project.id}?ts=${Date.now()}`, {
         method: "DELETE",
         cache: "no-store",
       });
       const j = await res.json().catch(() => ({} as any));
-      if (!res.ok || !j.ok) {
+      // v1.1.19: treat the 404/0-rows case as soft-success — the row is already
+      // gone from the DB (it was a ghost from a stale cache), and the route
+      // already revalidated `/` so the next render will be fresh. Hard-navigate
+      // either way so the user lands on an accurate projects list.
+      const wasDeleted = res.ok && j.ok && (typeof j.deleted !== "number" || j.deleted >= 1);
+      const wasGhost = res.status === 404 && j.deleted === 0;
+      if (!wasDeleted && !wasGhost) {
         throw new Error(j.error || `Server returned ${res.status}`);
       }
-      if (typeof j.deleted === "number" && j.deleted === 0) {
-        throw new Error("Server reported 0 rows deleted. The record may already be gone — try a hard refresh.");
-      }
       closeConfirm();
-      // v1.1.18: hard-navigate instead of router.refresh() so the projects
-      // list is unambiguously re-fetched from the server with no client cache.
-      // The cache-busting query param defeats any edge cache.
       if (typeof window !== "undefined") {
         window.location.assign(`/?ts=${Date.now()}`);
       } else {
