@@ -26,11 +26,13 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
 
   // v1.1.6: auto-clustering bookkeeping. We compare a signature of the current
   // keyword SET (sorted, lowercased) against the signature we last clustered.
-  // This handles add / edit / delete uniformly — any of them produces a new
-  // signature — and avoids spurious re-cluster loops when onChanged() causes
-  // the parent to re-fetch and pass back a fresh-reference-but-same-content
-  // keyword array.
   const lastClusteredSigRef = useRef<string>("");
+  // v1.1.26: hard time-based cooldown. Even if the signature differs from the
+  // last clustered version, refuse to auto-trigger another cluster within 30
+  // seconds of the previous one. Belt-and-suspenders against any cause-chain
+  // that produces repeat clusters (e.g., signature flicker during a state
+  // transition, retry logic, etc.).
+  const lastClusteredAtRef = useRef<number>(0);
 
   async function load() {
     const res = await fetch(`/api/projects/${projectId}/keywords`);
@@ -71,19 +73,27 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
       return;
     }
 
+    // v1.1.26: hard time-based cooldown. Refuse to schedule a new cluster
+    // within 30 seconds of the last one regardless of signature changes.
+    const elapsedSinceLastCluster = Date.now() - lastClusteredAtRef.current;
+    if (lastClusteredAtRef.current > 0 && elapsedSinceLastCluster < 30_000) {
+      return;
+    }
+
     // v1.1.11: 3s debounce (was 8s). Short enough that single-keyword adds
     // feel immediate; long enough to coalesce a quick paste of 5-15 keywords
     // into one cluster call instead of N.
     const timer = setTimeout(async () => {
-      // Re-check refreshing right before firing — user may have hit Refresh
-      // during the debounce window.
       if (refreshing) return;
+      // One more cooldown check at fire time in case anything raced.
+      if (Date.now() - lastClusteredAtRef.current < 30_000 && lastClusteredAtRef.current > 0) return;
       setClustering(true);
       try {
         const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
         if (res.ok) {
           const j = await res.json();
           lastClusteredSigRef.current = sig;
+          lastClusteredAtRef.current = Date.now();
           setLastClusterSummary(j.clusters ?? null);
           onChanged();
         }
@@ -204,6 +214,11 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Clustering failed");
       setLastClusterSummary(j.clusters ?? null);
+      // v1.1.26: stamp the same cooldown refs so the auto-cluster effect knows
+      // a manual cluster just happened and respects the cooldown window.
+      lastClusteredAtRef.current = Date.now();
+      const sig = keywords.map((k) => k.keyword.toLowerCase().trim()).sort().join("|");
+      lastClusteredSigRef.current = sig;
       setMsg(`Clustered ${j.assigned} keyword${j.assigned === 1 ? "" : "s"} into ${j.clusters?.length ?? 0} topic group${(j.clusters?.length ?? 0) === 1 ? "" : "s"}.`);
       onChanged();
     } catch (e: any) {

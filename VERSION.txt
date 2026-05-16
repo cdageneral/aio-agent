@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.25
+version: 1.1.26
 released: 2026-05-13
-codename: never-fail-on-truncation
+codename: stop-the-cascade
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.

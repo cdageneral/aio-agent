@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.26] — 2026-05-13
+
+Stop the post-cluster cascade — dashboard no longer refreshes everything every few seconds.
+
+### Fixed
+- **`Dashboard.load()` was incrementing `refreshNonce` on every call**, which triggered QuickWinsPanel and KeywordExplorer to refetch their own data. Combined with the auto-cluster's `onChanged → load → nonce++ → child refetch` chain (and any cluster re-trigger), the user saw visible re-fetch activity every few seconds. Removed the nonce bump from `load()`. Nonce now only increments on explicit user Refresh — auto-cluster cycles update metrics + cluster cards via `setData(j)` but no longer cascade into downstream panels.
+
+### Added
+- **30-second hard cooldown** on KeywordPanel's auto-cluster useEffect. Even if the keyword signature differs from the last clustered version, refuses to schedule another cluster within 30 seconds of the previous one. Defends against any cause-chain that produces repeat clusters — signature flicker during state transitions, retry logic, etc.
+- The cooldown ref is also stamped by the manual "Cluster now" button so clicking it pauses the auto-cluster effect for 30 seconds afterward too.
+
+### Notes
+- Trade-off: AIO Opportunities and Keyword Drilldown won't auto-refetch when only clustering has changed. Cluster_label tags on those rows may show as the previous cluster name briefly until the next explicit Refresh. In practice this only matters if the user re-clusters mid-session AND then immediately drills down — uncommon flow.
+
 ## [1.1.25] — 2026-05-13
 
 Fix cluster JSON truncation — verified with five test cases before shipping.

@@ -96,13 +96,12 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     if (Array.isArray(j?.project?.suggested_competitors)) {
       setSuggestedCompetitors(j.project.suggested_competitors);
     }
-    // v1.1.15: signal downstream panels (Quick Wins, Drilldown) to refetch
-    // whenever the metrics payload changes. This catches the case where
-    // auto-clustering completes via onChanged() and the cluster cards appear
-    // — at the same moment, the per-keyword data the lower panels show needs
-    // to be re-fetched so AIO Opportunities and the Drilldown reflect the
-    // freshest snapshot without requiring another manual click.
-    setRefreshNonce((n) => n + 1);
+    // v1.1.26: do NOT bump refreshNonce here. The previous design caused a
+    // cascade: cluster completes → onChanged → load → nonce++ → child panels
+    // refetch. Combined with auto-cluster's own re-trigger pattern, this
+    // looked like "refreshing every few seconds." Now nonce only bumps on
+    // explicit user Refresh, so cluster cards still update (via setData) but
+    // downstream panels don't unnecessarily re-fetch on every cluster cycle.
     setLoading(false);
   }, [projectId, region]); // eslint-disable-line react-hooks/exhaustive-deps
 
