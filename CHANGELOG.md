@@ -4,6 +4,38 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.23] — 2026-05-13
+
+Update button on the date picker, removed MoM/YoY, visible dots on trend lines.
+
+### Added
+- **Update button** next to the From/To date inputs. Date inputs now track local pending state; the new range commits to the charts only when Update is clicked. Update highlights solid purple when there's an unsaved edit, muted purple when in sync. Preset chips (30 days · 90 days · 6m · 1y · All time) still apply immediately on click since they're a one-click action.
+- **Latest-value summary** above the AIOs Triggered chart: shows "Market 423 · Footprint 287 · N snapshots plotted" so users see actual numbers even when the line is short.
+
+### Removed
+- **MoM and YoY delta badges** from the AIOs Triggered chart. User said they're not needed there. The badges only ever populated with 30+ days of snapshot history anyway, which most fresh projects don't have, so they were usually dashes.
+
+### Changed
+- **Visible data-point dots** on both charts (radius 3-4px, larger on the client/market series, even larger on hover via `activeDot`). With only 1-2 snapshots in a series, the line was nearly invisible — explicit dots make each plotted point obvious.
+- **No-data callout** on both charts rewritten: "No snapshots in this range. Try a wider window or click All time."
+
+### Notes
+- The "AIO Trends aren't populating" symptom is most likely caused by a series with only 1-2 snapshots — the chart was rendering correctly but the line was barely visible. The new visible dots + numeric summary make the data legible even in that case.
+
+## [1.1.22] — 2026-05-13
+
+Visible "X of Y snapshots in range" feedback above the trend charts.
+
+### Fixed (UX, not functionality)
+- **User reported the date picker "doesn't update"** but the wiring is correct — range state flows from PeriodSelector to both charts, both call filterByDateRange. With only 2-3 snapshots, both data points fall within almost any range tested, so the chart looks identical and the filter felt broken. Now there's an explicit counter so users can see the filter IS reactive.
+
+### Added
+- **Live snapshot count next to "AIO trends" title** updates in real time as the user changes From/To dates or clicks a preset. Reads as either "5 snapshots (all in range)" when nothing is filtered, or "3 of 5 snapshots in selected range" when the filter excludes some.
+- **Red callout** when the range matches zero snapshots: "← no data in this window, try a wider range or click All time." Visible right next to the snapshot count so it's hard to miss.
+
+### Notes
+- No functional change to the filter logic itself. This is pure visible feedback so users can verify their date pick is doing something even when the chart line doesn't visibly differ.
+
 ## [1.1.21] — 2026-05-13
 
 Surface the real cluster-keywords error instead of a bare 500.

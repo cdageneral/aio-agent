@@ -1,14 +1,15 @@
 "use client";
+import { useEffect, useState } from "react";
 import { DateRange, Period, PERIOD_OPTIONS, presetToRange } from "./chartUtils";
 
 /**
  * Date-range picker for the AIO Trends + Acquisition Rate charts.
  *
- * v1.1.16 redesign: explicit, prominent styling for the date inputs so they
- * stand out clearly against the dark canvas. v1.1.14's inline-style approach
- * left them invisible-looking in dark mode — users would see only the preset
- * chips and not realize the From/To fields existed. Now the inputs have
- * obvious borders, calendar icons, and a "Custom range" label.
+ * v1.1.23: explicit "Update" button. Date inputs now track local pending
+ * state; only when Update is clicked does the range commit to the parent
+ * and re-render the charts. Preset chips bypass this and apply immediately
+ * since they're a one-click action. Keeps users in control of when the
+ * chart refreshes and avoids mid-edit re-renders.
  *
  * (File still named PeriodSelector so existing imports work; behavior is
  * date-range based since v1.1.14.)
@@ -20,6 +21,17 @@ export default function PeriodSelector({
   value: DateRange;
   onChange: (r: DateRange) => void;
 }) {
+  // v1.1.23: pending state lives here; commits to parent only on Update click.
+  const [pending, setPending] = useState<DateRange>(value);
+
+  // Whenever the parent-driven value changes (e.g., from a preset click),
+  // sync the local pending state so the inputs reflect the new range.
+  useEffect(() => {
+    setPending(value);
+  }, [value]);
+
+  const dirty = pending.from !== value.from || pending.to !== value.to;
+
   const inputStyle: React.CSSProperties = {
     background: "#0c0f15",
     border: "1px solid rgba(79,140,255,0.30)",
@@ -51,6 +63,10 @@ export default function PeriodSelector({
   const isAllTime = !value.from && !value.to;
   const isCustom = !isAllTime && !PERIOD_OPTIONS.some((o) => isPreset(o.value));
 
+  function applyPending() {
+    onChange(pending);
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8, alignItems: "flex-end" }}>
       {/* Date inputs row */}
@@ -58,9 +74,28 @@ export default function PeriodSelector({
         <span style={{ fontSize: 10, color: "#94a3b8", fontWeight: 600, letterSpacing: "0.05em", textTransform: "uppercase" }}>
           Custom range{isCustom && <span style={{ color: "#4f8cff", marginLeft: 6 }}>· active</span>}
         </span>
-        <DateField label="From" value={value.from} onChange={(v) => onChange({ ...value, from: v })} inputStyle={inputStyle} />
+        <DateField label="From" value={pending.from} onChange={(v) => setPending({ ...pending, from: v })} inputStyle={inputStyle} />
         <span style={{ color: "#5a6478", fontSize: 14 }}>→</span>
-        <DateField label="To" value={value.to} onChange={(v) => onChange({ ...value, to: v })} inputStyle={inputStyle} />
+        <DateField label="To" value={pending.to} onChange={(v) => setPending({ ...pending, to: v })} inputStyle={inputStyle} />
+        {/* v1.1.23: Update button — commits pending dates to the parent range.
+            Highlights purple when there's an unsaved change; muted when synced. */}
+        <button
+          onClick={applyPending}
+          disabled={!dirty}
+          title={dirty ? "Apply the dates above to the charts" : "No date changes to apply"}
+          style={{
+            fontSize: 11.5, padding: "7px 14px", borderRadius: 7,
+            background: dirty ? "#a878ff" : "rgba(168,120,255,0.12)",
+            color: dirty ? "#06070b" : "#a878ff",
+            border: "none", fontWeight: 700,
+            cursor: dirty ? "pointer" : "not-allowed",
+            display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
+            transition: "background 120ms ease",
+          }}
+        >
+          <i className="ti ti-refresh" style={{ fontSize: 12 }} aria-hidden="true"></i>
+          Update
+        </button>
       </div>
 
       {/* Quick preset chips row */}
@@ -98,8 +133,6 @@ function DateField({
     <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}>
       <span style={{ fontSize: 10, color: "#8a93a6", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>{label}</span>
       <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
-        {/* Inline SVG calendar icon — sits inside the input pill so the user
-            sees a clickable calendar affordance even before clicking. */}
         <svg
           width="14"
           height="14"

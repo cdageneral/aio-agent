@@ -10,7 +10,7 @@ import RegionSelector, { RegionMode, regionsForMode } from "./RegionSelector";
 import StoryPanel from "./StoryPanel";
 import ShareOfVoiceHero from "./ShareOfVoiceHero";
 import FirstRefreshBanner from "./FirstRefreshBanner";
-import { DateRange, DEFAULT_RANGE } from "./chartUtils";
+import { DateRange, DEFAULT_RANGE, filterByDateRange } from "./chartUtils";
 import type { SuggestedCompetitor } from "./SmartSegmentDetector";
 import CompetitorTable from "./CompetitorTable";
 import KeywordExplorer from "./KeywordExplorer";
@@ -248,7 +248,26 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <div className="flex items-baseline justify-between flex-wrap gap-3 mb-4">
           <div>
             <h2 className="h2">AIO trends</h2>
-            <p className="text-xs muted mt-0.5">{series.length} snapshot{series.length === 1 ? "" : "s"} · timeline applies to both charts</p>
+            {(() => {
+              // v1.1.22: visible filter feedback. With only 2-3 snapshots, the
+              // chart looks identical at most ranges so users think the filter
+              // isn't working — make it obvious that the count IS reactive.
+              const filteredCount = filterByDateRange(series, range).length;
+              const totalCount = series.length;
+              const inRange = filteredCount === totalCount
+                ? `${totalCount} snapshot${totalCount === 1 ? "" : "s"} (all in range)`
+                : `${filteredCount} of ${totalCount} snapshot${totalCount === 1 ? "" : "s"} in selected range`;
+              return (
+                <p className="text-xs muted mt-0.5">
+                  {inRange} · timeline applies to both charts
+                  {filteredCount === 0 && totalCount > 0 && (
+                    <span style={{ color: "#ff6464", marginLeft: 8 }}>
+                      ← no data in this window, try a wider range or click <strong>All time</strong>
+                    </span>
+                  )}
+                </p>
+              );
+            })()}
           </div>
           <PeriodSelector value={range} onChange={setRange} />
         </div>

@@ -23,7 +23,11 @@ export default function AcquisitionChart({
   const filtered = filterByDateRange(series, range);
 
   if (!filtered || filtered.length === 0) {
-    return <div className="text-sm text-gray-500">No snapshots in this range.</div>;
+    return (
+      <div className="text-sm" style={{ color: "#8a93a6", padding: "20px 0", textAlign: "center" }}>
+        No snapshots in this range. Try a wider window or click <strong style={{ color: "#f4f6fb" }}>All time</strong>.
+      </div>
+    );
   }
 
   const brands = Array.from(new Set(filtered.flatMap((s) => s.brand_aios.map((b: any) => b.brand_name))));
@@ -57,16 +61,23 @@ export default function AcquisitionChart({
             <XAxis dataKey="ran_at" tick={{ fontSize: 11, fill: "#8a93a6" }} axisLine={{ stroke: "rgba(255,255,255,0.08)" }} tickLine={false} />
             <YAxis tick={{ fontSize: 11, fill: "#8a93a6" }} tickFormatter={(v) => `${v}%`} axisLine={false} tickLine={false} />
             <Tooltip contentStyle={{ background: "#11151d", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 10, color: "#f4f6fb", fontSize: 12 }} formatter={(v: any) => `${v}%`} cursor={{ stroke: "rgba(255,255,255,0.08)" }} />
-            {brands.map((b, i) => (
-              <Line
-                key={b}
-                type="monotone"
-                dataKey={b}
-                stroke={b === project.brand_name ? "#4f8cff" : PALETTE[i % PALETTE.length]}
-                strokeWidth={b === project.brand_name ? 2.75 : 1.75}
-                dot={false}
-              />
-            ))}
+            {brands.map((b, i) => {
+              const color = b === project.brand_name ? "#4f8cff" : PALETTE[i % PALETTE.length];
+              const isClient = b === project.brand_name;
+              return (
+                <Line
+                  key={b}
+                  type="monotone"
+                  dataKey={b}
+                  stroke={color}
+                  strokeWidth={isClient ? 2.75 : 1.75}
+                  // v1.1.23: visible dots so 1-2 snapshot series shows as plotted
+                  // points instead of an invisible line.
+                  dot={{ r: isClient ? 4 : 3, strokeWidth: 0, fill: color }}
+                  activeDot={{ r: isClient ? 6 : 5 }}
+                />
+              );
+            })}
           </LineChart>
         </ResponsiveContainer>
       </div>
