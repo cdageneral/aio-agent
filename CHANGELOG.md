@@ -4,6 +4,44 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.25] — 2026-05-13
+
+Fix cluster JSON truncation — verified with five test cases before shipping.
+
+### Root cause
+The "Could not parse cluster JSON: Expected ',' or ']' after array element in JSON at position 15079" error was Claude's response being cut off mid-JSON because `max_tokens: 4096` is too small for cluster outputs with 50-100+ keywords. The strict `JSON.parse` couldn't recover from a truncated string.
+
+### Fixed
+- **Bumped `max_tokens` from 4096 → 8192** in `lib/llm.ts` clusterKeywords. Covers all normal-sized keyword sets cleanly.
+- **Added `tryRepairTruncatedClusterJson()` fallback.** Walks the response brace-by-brace, properly handles strings + escape sequences, finds the last cleanly-closed cluster object, and rebuilds valid JSON by appending `]}` to close the array + root object. If strict parse fails, repair attempts to recover whatever complete clusters did make it through.
+- **Tested with five scenarios before shipping**:
+  1. Truncated mid-cluster (position past last complete `}`) → recovers all complete clusters ✓
+  2. Complete JSON → strict parse handles it directly ✓
+  3. Truncated before any complete cluster → returns null, throws a real error ✓
+  4. String containing `{` or `}` (brace inside cluster name) → doesn't confuse depth tracking ✓
+  5. Escaped quotes inside keyword strings → string-boundary detection is robust ✓
+- **Surfaces `stop_reason` and response length** in the error message when repair fails too, so the next failure mode (if any) is diagnosable.
+- **Logs a console.warn** when repair successfully recovered a truncated response, so Vercel logs show which calls hit the limit.
+
+### Notes
+- Repair logic is mechanical (no LLM round-trip), so when it activates the user still gets clusters — just possibly fewer than Claude intended to produce. The console warning makes it visible in Vercel logs.
+- If the universe is so large that even 8192 tokens + repair can't return useful clusters, the error message now tells the user to "try clustering with fewer keywords" instead of just a bare 500.
+
+## [1.1.24] — 2026-05-13
+
+Make the Update button always clickable + flash green "Applied" on click.
+
+### Fixed
+- **Update button felt like it wasn't doing anything.** v1.1.23's `disabled={!dirty}` pattern is technically correct (button greys when there's nothing to apply) but in practice it's confusing — users click an enabled-looking button, the range is already in sync, nothing visible changes, they assume it broke. Three changes to clear it up:
+
+### Changed
+- **Update button is now always clickable.** `onChange(pending)` is idempotent so calling it when pending===value just re-commits the same range. Functions as a "force re-render charts" trigger when the user wants to nudge them.
+- **Brief lime "Applied ✓" flash for 1.2 seconds after every click.** The button visibly turns lime, icon switches from refresh to checkmark, then fades back to its normal state. Users see the click registered.
+- **Background color clearly distinguishes three states**: solid purple = unsaved changes pending, muted purple = synced (no pending changes), lime = just applied (confirmation flash).
+
+### Notes
+- If the chart line still doesn't visibly change after clicking Update, that's because all your snapshots fall within both the old and new ranges. The X-of-Y snapshot counter and the latest-value strip on each chart (from v1.1.22 and v1.1.23) will confirm whether the filter is doing anything.
+
 ## [1.1.23] — 2026-05-13
 
 Update button on the date picker, removed MoM/YoY, visible dots on trend lines.

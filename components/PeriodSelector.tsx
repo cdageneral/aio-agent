@@ -63,8 +63,17 @@ export default function PeriodSelector({
   const isAllTime = !value.from && !value.to;
   const isCustom = !isAllTime && !PERIOD_OPTIONS.some((o) => isPreset(o.value));
 
+  // v1.1.24: brief visual flash on apply so the user can confirm the click
+  // registered, even when the chart line doesn't visibly change (e.g., all
+  // snapshots already fell within both old and new ranges).
+  const [justApplied, setJustApplied] = useState(false);
+
   function applyPending() {
+    // Always commit, even if dirty is false — idempotent and acts as a "force
+    // refresh charts" trigger if the user wants to nudge them.
     onChange(pending);
+    setJustApplied(true);
+    setTimeout(() => setJustApplied(false), 1200);
   }
 
   return (
@@ -77,24 +86,25 @@ export default function PeriodSelector({
         <DateField label="From" value={pending.from} onChange={(v) => setPending({ ...pending, from: v })} inputStyle={inputStyle} />
         <span style={{ color: "#5a6478", fontSize: 14 }}>→</span>
         <DateField label="To" value={pending.to} onChange={(v) => setPending({ ...pending, to: v })} inputStyle={inputStyle} />
-        {/* v1.1.23: Update button — commits pending dates to the parent range.
-            Highlights purple when there's an unsaved change; muted when synced. */}
+        {/* v1.1.24: Update button — always clickable. Solid purple highlights
+            when there's an unsaved date change. Briefly turns lime ("Applied")
+            on click so users can see their click registered even when the
+            chart line doesn't visibly differ. */}
         <button
           onClick={applyPending}
-          disabled={!dirty}
-          title={dirty ? "Apply the dates above to the charts" : "No date changes to apply"}
+          title={dirty ? "Apply the dates above to the charts" : "Re-apply current range (no changes to commit)"}
           style={{
             fontSize: 11.5, padding: "7px 14px", borderRadius: 7,
-            background: dirty ? "#a878ff" : "rgba(168,120,255,0.12)",
-            color: dirty ? "#06070b" : "#a878ff",
+            background: justApplied ? "#b6f53b" : dirty ? "#a878ff" : "rgba(168,120,255,0.18)",
+            color: justApplied ? "#06070b" : dirty ? "#06070b" : "#a878ff",
             border: "none", fontWeight: 700,
-            cursor: dirty ? "pointer" : "not-allowed",
+            cursor: "pointer",
             display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap",
-            transition: "background 120ms ease",
+            transition: "background 200ms ease, color 200ms ease",
           }}
         >
-          <i className="ti ti-refresh" style={{ fontSize: 12 }} aria-hidden="true"></i>
-          Update
+          <i className={`ti ${justApplied ? "ti-check" : "ti-refresh"}`} style={{ fontSize: 12 }} aria-hidden="true"></i>
+          {justApplied ? "Applied" : "Update"}
         </button>
       </div>
 

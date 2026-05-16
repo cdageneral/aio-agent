@@ -185,7 +185,11 @@ ${input.keywords.join("\n")}`;
 
   const resp = await ai.messages.create({
     model: "claude-haiku-4-5-20251001",
-    max_tokens: 4096,
+    // v1.1.25: bumped from 4096 → 8192. Cluster output for 50-100+ keywords
+    // was exceeding 4K tokens and getting truncated mid-JSON, which the
+    // strict JSON.parse couldn't recover from. 8192 covers normal sets;
+    // the repair fallback below handles edge cases that still overrun.
+    max_tokens: 8192,
     system: CLUSTER_SYSTEM_PROMPT,
     messages: [{ role: "user", content: userContent }],
   });
@@ -195,9 +199,27 @@ ${input.keywords.join("\n")}`;
   const json = inner.match(/\{[\s\S]*\}/)?.[0];
   if (!json) throw new Error("LLM did not return cluster JSON");
 
+  // v1.1.25: strict parse first; if truncation broke it, try a brace-walking
+  // repair before giving up. This recovers the clusters that DID complete
+  // even when the tail of the response got cut off.
   let parsed: any;
-  try { parsed = JSON.parse(json); } catch (e: any) {
-    throw new Error(`Could not parse cluster JSON: ${e.message}`);
+  try {
+    parsed = JSON.parse(json);
+  } catch (e: any) {
+    const stopReason = (resp as any)?.stop_reason ?? "unknown";
+    const repaired = tryRepairTruncatedClusterJson(json);
+    if (!repaired) {
+      throw new Error(
+        `Could not parse cluster JSON (${e.message}). stop_reason=${stopReason}, length=${json.length}. ` +
+        `Response likely hit max_tokens — try clustering with fewer keywords.`,
+      );
+    }
+    try {
+      parsed = JSON.parse(repaired);
+    } catch (e2: any) {
+      throw new Error(`Cluster JSON repair failed: ${e2.message} (stop_reason=${stopReason})`);
+    }
+    console.warn(`[clusterKeywords] response was truncated (stop_reason=${stopReason}); repaired to recover ${parsed?.clusters?.length ?? 0} clusters`);
   }
   if (!Array.isArray(parsed.clusters)) throw new Error("LLM response missing clusters array");
 
@@ -210,4 +232,46 @@ ${input.keywords.join("\n")}`;
     .filter((c: KeywordCluster) => c.name && c.keywords.length > 0);
 
   return clusters;
+}
+
+/**
+ * v1.1.25: salvage a truncated cluster JSON response. Walks the string
+ * brace-by-brace, tracks string boundaries + escapes, finds the last cleanly-
+ * closed cluster object, and rebuilds valid JSON by appending `]}` to close
+ * the clusters array + root object. Returns null if no complete cluster was
+ * found (response was too short to recover anything useful).
+ */
+function tryRepairTruncatedClusterJson(json: string): string | null {
+  const clustersKey = json.indexOf('"clusters"');
+  if (clustersKey < 0) return null;
+  const arrStart = json.indexOf("[", clustersKey);
+  if (arrStart < 0) return null;
+
+  let depth = 0;
+  let inStr = false;
+  let escape = false;
+  let lastCompleteClusterEnd = -1;
+
+  for (let i = arrStart; i < json.length; i++) {
+    const c = json[i];
+    if (escape) { escape = false; continue; }
+    if (inStr) {
+      if (c === "\\") escape = true;
+      else if (c === '"') inStr = false;
+      continue;
+    }
+    if (c === '"') { inStr = true; continue; }
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      // depth === 0 means we just closed a cluster object back to array level.
+      // (We don't count `[` in our depth, so depth=0 is "inside the array,
+      // between cluster objects.") Each such position is a safe truncation
+      // point — everything up to and including this `}` is a complete cluster.
+      if (depth === 0) lastCompleteClusterEnd = i;
+    }
+  }
+
+  if (lastCompleteClusterEnd < 0) return null;
+  return json.slice(0, lastCompleteClusterEnd + 1) + "]}";
 }
