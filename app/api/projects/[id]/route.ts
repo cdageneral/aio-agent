@@ -36,6 +36,22 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
 }
 
 export async function DELETE(_req: NextRequest, ctx: { params: { id: string } }) {
-  await deleteProject(ctx.params.id);
-  return NextResponse.json({ ok: true });
+  // v1.1.18: report row-count and surface SQL errors so a "delete didn't
+  // delete" symptom (modal closes, but project reappears) is diagnosable.
+  try {
+    const deleted = await deleteProject(ctx.params.id);
+    if (deleted === 0) {
+      return NextResponse.json(
+        { ok: false, deleted: 0, error: "No project matched that ID (already deleted, or wrong record?)" },
+        { status: 404 },
+      );
+    }
+    return NextResponse.json({ ok: true, deleted });
+  } catch (err: any) {
+    console.error("[/api/projects/[id] DELETE] failed:", err);
+    return NextResponse.json(
+      { ok: false, error: String(err?.message ?? err ?? "delete failed") },
+      { status: 500 },
+    );
+  }
 }

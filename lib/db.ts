@@ -157,8 +157,11 @@ export async function getProject(id: string): Promise<Project | null> {
   return rows[0] ?? null;
 }
 
-export async function deleteProject(id: string): Promise<void> {
-  await sql`DELETE FROM projects WHERE id = ${id};`;
+/** v1.1.18: returns the count of rows actually deleted so callers can
+ *  distinguish "successfully deleted" from "no row matched that ID." */
+export async function deleteProject(id: string): Promise<number> {
+  const result = await sql`DELETE FROM projects WHERE id = ${id} RETURNING id;`;
+  return result.rows.length;
 }
 
 // -------- Competitors --------

@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.17
+version: 1.1.18
 released: 2026-05-13
-codename: delete-actually-works
+codename: gone-means-gone
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.

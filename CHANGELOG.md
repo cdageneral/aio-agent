@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.18] — 2026-05-13
+
+Harden project delete so it actually deletes and the list re-renders without the row.
+
+### Changed
+- **`deleteProject` in `lib/db.ts`** now uses `DELETE … RETURNING id` and returns the count of affected rows (Promise<number> instead of void). Lets callers distinguish "deleted 1 row" from "matched 0 rows" — the previous void return swallowed that signal.
+- **`DELETE /api/projects/[id]`** now wraps the call in try/catch, returns `{ok, deleted, error}`, and serves a 404 with an explicit error message if `deleted === 0` (i.e., the row was already gone or the ID didn't match anything). Any SQL exception surfaces with a real message to the client instead of disappearing into a silent 500.
+- **`ProjectCard.doDelete`** parses the response and additionally rejects if `deleted === 0`. After a confirmed success it hard-navigates with `window.location.assign("/?ts=…")` instead of `router.refresh()` — forces a full server-side re-fetch with a cache-busting query param, defeating any client / edge cache that might be serving a stale projects list.
+
+### Why
+- User reported: trash icon clicked, modal opens, brand name typed, Delete button enables, click → modal closes → projects list re-renders with the project still showing, even after a manual page refresh.
+- Two possible causes from the symptom: (1) the SQL matched 0 rows (silent ID mismatch) and the route still returned 200, or (2) something downstream of the SQL was caching the projects list. The diagnostics + hard navigation cover both.
+
 ## [1.1.17] — 2026-05-13
 
 Fix the delete-project placeholder trap.
