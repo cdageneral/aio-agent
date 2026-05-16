@@ -4,6 +4,29 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.21] — 2026-05-13
+
+Surface the real cluster-keywords error instead of a bare 500.
+
+### Fixed
+- **`/api/projects/[id]/cluster-keywords` had no try/catch** around the Anthropic call. Any failure — missing `ANTHROPIC_API_KEY`, invalid key, rate limit, model deprecated, malformed JSON response, schema mismatch on the cluster_label column — became a generic 500 with no body. User saw "Server returned 500" with no clue how to fix.
+
+### Added
+- **Top-level try/catch** with `console.error` for Vercel logs + a JSON error response so the client surface shows the real cause.
+- **`friendlyClusterError()`** translator for the most common cases:
+  - Missing `ANTHROPIC_API_KEY` → "Add it under Vercel → Project Settings → Environment Variables and redeploy."
+  - 401/invalid key → "Anthropic API rejected the request — regenerate the key."
+  - 429/rate limit → "Anthropic rate-limited the cluster call. Wait a minute and try again."
+  - Insufficient credits → "Add credits at console.anthropic.com → Billing."
+  - Model unavailable → "Check the model is enabled for your org."
+  - JSON parse error → "Claude returned a response we couldn't parse. Usually transient — try again."
+  - Postgres schema error → "Re-run db/schema.sql in the Neon console."
+  - Unknown → raw error message.
+- **Better validation copy** for known input failures (e.g., "clustering needs at least 5 keywords; you have 3").
+
+### Notes
+- This release just makes the failure mode visible — it doesn't fix whatever was causing your specific 500. After deploying, click "Cluster keywords now" again and the modal will tell you exactly what went wrong. Most common in fresh deployments: ANTHROPIC_API_KEY is missing from Vercel env vars.
+
 ## [1.1.20] — 2026-05-13
 
 Add manual cluster-now fallback button. Fix stale "Click Cluster keywords" copy.

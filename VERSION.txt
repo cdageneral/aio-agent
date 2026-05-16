@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.20
+version: 1.1.21
 released: 2026-05-13
-codename: cluster-now-fallback
+codename: real-errors-real-fast
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.
