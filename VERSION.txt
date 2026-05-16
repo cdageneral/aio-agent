@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.19
+version: 1.1.20
 released: 2026-05-13
-codename: ghost-busted
+codename: cluster-now-fallback
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.

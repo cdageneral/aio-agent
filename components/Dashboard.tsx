@@ -281,6 +281,8 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           clientBrand={project.brand_name}
           activeCluster={clusterFilter}
           onClusterSelect={pickCluster}
+          projectId={projectId}
+          onChanged={load}
         />
       </section>
 

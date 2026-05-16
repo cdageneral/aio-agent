@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.20] — 2026-05-13
+
+Add manual cluster-now fallback button. Fix stale "Click Cluster keywords" copy.
+
+### Fixed
+- **KeywordClusters empty-state copy** referenced a "Cluster keywords" button that no longer existed (removed in v1.1.5 when clustering went automatic). Updated copy + added a real "Cluster keywords now" button that POSTs to `/cluster-keywords` directly when clicked.
+- **Surfaces clustering errors** instead of silently swallowing them. If the manual button fails (Claude API issue, etc.) you'll see a red error message right inside the cluster panel.
+
+### Added
+- **"Cluster now" button** in the Keyword Universe panel's auto-cluster status strip. Auto-cluster still runs on a 3s debounce, but if you want to force a run immediately (or auto-cluster stalled out for any reason) you can click this. Disabled until you have 5+ keywords.
+- **`projectId` + `onChanged` props** threaded through to KeywordClusters so the empty-state button can trigger clustering directly and bump the metrics reload.
+
+### Notes
+- Auto-clustering still triggers automatically on initial load (when keywords lack cluster_label) and on add/edit/delete of keywords. The manual buttons are belt-and-suspenders fallbacks for the rare case auto-cluster doesn't kick in.
+
 ## [1.1.19] — 2026-05-13
 
 Bust the Next.js full-route cache after a delete attempt — ghost projects disappear.

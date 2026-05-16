@@ -279,8 +279,8 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
           - debounced 3s so quick bulk adds coalesce into one call
           - paused while a refresh is in flight (avoid the race in v1.1.10)
           Minimum 5 keywords. */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)" }}>
-        <div style={{ minWidth: 0 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#a878ff", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 5 }}>
             <i className={`ti ${clustering ? "ti-loader-2" : "ti-layers-subtract"}`} style={{ fontSize: 12, animation: clustering ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
             {clustering ? "Auto-clustering…" : "Topic clustering · automatic"}
@@ -295,6 +295,26 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
               : "Keywords will be auto-clustered shortly after you add them."}
           </div>
         </div>
+        {/* v1.1.20: manual fallback. Auto-cluster usually fires on a 3s debounce
+            but if the user wants to trigger it immediately or auto-cluster
+            stalled out for any reason, this button forces a run right now. */}
+        <button
+          onClick={runClustering}
+          disabled={clustering || keywords.length < 5}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 5,
+            padding: "5px 11px", borderRadius: 7,
+            background: clustering || keywords.length < 5 ? "rgba(168,120,255,0.15)" : "#a878ff",
+            color: clustering || keywords.length < 5 ? "#a878ff" : "#06070b",
+            fontSize: 11, fontWeight: 600,
+            border: "none", whiteSpace: "nowrap",
+            cursor: clustering || keywords.length < 5 ? "not-allowed" : "pointer",
+          }}
+          title={keywords.length < 5 ? "Add at least 5 keywords first" : "Run clustering now"}
+        >
+          <i className={`ti ${clustering ? "ti-loader-2" : "ti-wand"}`} style={{ fontSize: 12, animation: clustering ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
+          Cluster now
+        </button>
       </div>
 
       {keywords.length > 0 ? (

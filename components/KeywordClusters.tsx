@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 
 /**
  * Topic-cluster card grid. One card per cluster, ranked by AIO count (the
@@ -34,6 +35,8 @@ export default function KeywordClusters({
   clientBrand,
   activeCluster,
   onClusterSelect,
+  projectId,
+  onChanged,
 }: {
   clusters: ClusterMetrics[];
   clientBrand: string;
@@ -41,11 +44,62 @@ export default function KeywordClusters({
   activeCluster?: string;
   /** Called when a cluster card is clicked. Toggles selection. */
   onClusterSelect?: (name: string) => void;
+  /** v1.1.20: passed through so the empty-state Cluster-now button can
+   *  POST /cluster-keywords directly and refresh metrics. */
+  projectId?: string;
+  onChanged?: () => void;
 }) {
+  const [clustering, setClustering] = useState(false);
+  const [clusterErr, setClusterErr] = useState<string | null>(null);
+
+  async function runCluster() {
+    if (!projectId) return;
+    setClustering(true);
+    setClusterErr(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
+      const j = await res.json().catch(() => ({} as any));
+      if (!res.ok) throw new Error(j.error ?? `Server returned ${res.status}`);
+      onChanged?.();
+    } catch (e: any) {
+      setClusterErr(e.message ?? "Clustering failed");
+    } finally {
+      setClustering(false);
+    }
+  }
+
   if (!clusters || clusters.length === 0) {
     return (
-      <div className="text-sm muted" style={{ padding: 14 }}>
-        Topics haven't been clustered yet. Click <strong style={{ color: "#f4f6fb" }}>Cluster keywords</strong> in the Keyword universe panel to group everything into 5-8 topical buckets.
+      <div style={{ padding: 16, borderRadius: 10, background: "rgba(168,120,255,0.04)", border: "1px solid rgba(168,120,255,0.18)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <div style={{ minWidth: 0 }}>
+            <div className="text-sm" style={{ color: "#f4f6fb", marginBottom: 4 }}>
+              No topic clusters yet.
+            </div>
+            <div className="text-xs muted">
+              Clustering runs automatically when you add keywords. If you don't see clusters within a few seconds, click the button to run it now.
+            </div>
+          </div>
+          <button
+            onClick={runCluster}
+            disabled={clustering || !projectId}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "7px 13px", borderRadius: 8,
+              background: clustering || !projectId ? "rgba(168,120,255,0.18)" : "#a878ff",
+              color: "#06070b", fontSize: 12.5, fontWeight: 600, border: "none",
+              cursor: clustering || !projectId ? "wait" : "pointer", whiteSpace: "nowrap",
+            }}
+          >
+            <i className={`ti ${clustering ? "ti-loader-2" : "ti-wand"}`} style={{ fontSize: 13, animation: clustering ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
+            {clustering ? "Clustering…" : "Cluster keywords now"}
+          </button>
+        </div>
+        {clusterErr && (
+          <div style={{ marginTop: 8, padding: "6px 10px", fontSize: 11, color: "#ff6464", background: "rgba(255,100,100,0.08)", border: "1px solid rgba(255,100,100,0.25)", borderRadius: 6 }}>
+            {clusterErr}
+          </div>
+        )}
       </div>
     );
   }
