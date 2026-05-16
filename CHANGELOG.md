@@ -4,6 +4,16 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.17] — 2026-05-13
+
+Fix the delete-project placeholder trap.
+
+### Fixed
+- **Delete confirmation input placeholder showed the brand name itself** (e.g., "Empower") so users thought the field was already filled in. They'd click "Delete project" and the button would stay disabled because the input was actually empty. Changed the placeholder to "Type the brand name here…" so it's obvious the user needs to type to fill the field.
+
+### Notes
+- Pure copy edit on `components/ProjectCard.tsx`. Confirmation logic itself unchanged — still requires typing the brand name exactly to enable the red Delete button.
+
 ## [1.1.16] — 2026-05-13
 
 Make the date-range inputs obviously visible in dark mode.

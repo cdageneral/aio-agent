@@ -186,7 +186,7 @@ export default function ProjectCard({ project }: { project: ProjectListItem }) {
               disabled={deleting}
               onChange={(e) => setTyped(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter" && canDelete && !deleting) doDelete(); }}
-              placeholder={project.brand_name}
+              placeholder="Type the brand name here…"
               style={{
                 width: "100%",
                 padding: "9px 12px",
