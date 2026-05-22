@@ -4,6 +4,44 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.33] — 2026-05-22
+
+Add a "Copy PPT Prompt" button that emits a fully-populated slide-generation prompt for the active deck.
+
+### Added
+- **Copy PPT Prompt button** in `ProjectHeader`, sitting to the left of *Export Full Report*. One click builds a long-form natural-language prompt from the live snapshot and writes it to the clipboard. The user pastes it into Claude / Copilot / ChatGPT inside PowerPoint to generate two slides:
+  - **Slide A — "AIO landscape"** — title bar with universe label, 7-card KPI strip (Available AIOs, AIO Penetration, Acquisition, Brand Mentions, Citation Share, Top Brand, Others), then a three-column bottom: featured brand highlight tile, full citation-share-by-brand bars (tracked brands + non-brand buckets), top non-brand domains by AIO count.
+  - **Slide B — "AIO opportunity map"** — three summary cards (LEADS / TRAILS / WIDE OPEN), full cluster grid with status badges, per-cluster numbers (kw, AIOs, penetration, client citation rate, caption), and an orange "THE READ" insight strip.
+- **`lib/export.ts` → `buildPptPrompt(latest, ctx)`** new pure function. Pulls KPIs from the SnapshotMetrics payload (totals, client brand metrics, full share-of-voice, top non-brand domains, every cluster's stats) and stitches them into a prompt with explicit style instructions telling the receiving AI to **match the active deck** (fonts, colors, masters) rather than hard-coding a look — so the button works regardless of which client deck is open.
+- **Toast confirmation** ("Prompt copied — paste into Claude/Copilot/ChatGPT inside PowerPoint") that auto-dismisses after 4 seconds, plus a clipboard-unavailable fallback that opens the prompt in a new tab.
+- **`Dashboard.tsx`** now passes `latestMetrics={latest}` into `ProjectHeader` so the prompt builder has live snapshot data without an extra fetch.
+
+### Why
+Users wanted a fast bridge from the dashboard into client decks. PDF export covers shareable artifacts, but PPT requires editable, on-brand slides — and every client deck has its own master. Rather than build a server-side PPT generator that can't know any given client's style, the prompt path lets the in-PowerPoint AI infer the deck's look automatically while the prompt itself carries every concrete number the slides need. The button stays disabled until a snapshot exists, with an explanatory tooltip.
+
+### Notes
+- Universe label in the slide title is derived from `project.segment_l3 ?? segment_l2 ?? segment_l1` so a TRT/HRT project lands as "AIO landscape — TRT/HRT keyword set" automatically.
+- The "THE READ" insight on slide 2 is generated heuristically from the cluster shape (e.g. "Empower leads in 8 clusters but at 5–25% citation rate — we win where no one tries hard. The 10 open clusters are the land grab.") so the slide ships with a usable narrative, not just data.
+
+## [1.1.32] — 2026-05-22
+
+Add a full-dashboard PDF export, anchored in the project header.
+
+### Added
+- **Export Full Report button** in `ProjectHeader`, sitting alongside Save changes and Run refresh. One click captures the entire dashboard — Story, Share of Voice, What Changed, AIO Trends + Acquisition charts, Topic Clusters, AIO Opportunities, Keyword Drilldown, Brand Comparison, and Other Domains — into a multi-page PDF.
+- **Dedicated cover page** with brand name, client URL, region scope, generated-at timestamp, and a section count.
+- **`lib/export.ts` → `exportFullReportToPdf(root, ctx)`** new helper that snapshots each top-level section of the dashboard individually via `html2canvas` and lays the bitmaps onto Letter-portrait PDF pages. Per-section capture (rather than one giant capture) preserves chart/panel integrity across page breaks. Long sections are automatically sliced across pages.
+- **`data-aio-report-root="true"`** attribute on the `Dashboard` wrapper, used by the exporter as a stable capture target rather than relying on selectors that could drift.
+- **html2canvas** added to `package.json` dependencies (was already vendored in `node_modules` from prior work but not declared).
+
+### Why
+Users wanted a single shareable artifact of the full report — not just a keyword drilldown — to send to clients and stakeholders without screen-recording the dashboard. Client-side `html2canvas` + `jsPDF` was chosen over server-side Puppeteer to avoid a heavy headless-Chrome dependency, and over `@react-pdf/renderer` to avoid rebuilding every chart as PDF primitives. The "what you see is what you print" approach guarantees the PDF matches what the user is looking at when they click Export.
+
+### Notes
+- Both libs are dynamic-imported, so the bundle only loads when the user actually clicks Export.
+- Cover page and page backgrounds use the app's dark surface color (`#0b0d12`) so the output matches the on-screen aesthetic.
+- Filename pattern: `aio-full-report-<brand-slug>-YYYY-MM-DD.pdf`.
+
 ## [1.1.31] — 2026-05-22
 
 Restructure the Story panel as a contained executive briefing card.

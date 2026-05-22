@@ -176,8 +176,12 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   if (!data) return <div className="text-sm muted">Loading…</div>;
   const { project, competitors, latest, series, growth } = data;
 
+  // v1.1.32: human label for the active region scope. Surfaced on the
+  // Full-Report PDF cover page so the print is self-describing months later.
+  const regionLabel = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-aio-report-root="true">
       <ProjectHeader
         project={project}
         onSaved={load}
@@ -185,6 +189,8 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         refreshing={refreshing}
         region={region}
         onRegionChange={setRegion}
+        regionLabel={regionLabel}
+        latestMetrics={latest}
         onCompetitorsSuggested={(c) => {
           // De-dupe against currently tracked competitors AND the existing suggestion list.
           const trackedDomains = new Set<string>(competitors.map((x: any) => (x.domain ?? "").toLowerCase()));

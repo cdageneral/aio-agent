@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import SmartSegmentDetector, { SegmentValue, SuggestedCompetitor } from "./SmartSegmentDetector";
 import RegionSelector, { RegionMode, regionsForMode } from "./RegionSelector";
-import { primaryBtnStyle, accentBtnStyle } from "./uiStyles";
+import { primaryBtnStyle, accentBtnStyle, ghostBtnStyle } from "./uiStyles";
+import { exportFullReportToPdf, buildPptPrompt } from "@/lib/export";
 
 /**
  * Top-of-dashboard control surface. Hosts the primary client URL input,
@@ -18,6 +19,8 @@ export default function ProjectHeader({
   onRegionChange,
   onCompetitorsSuggested,
   onSeedKeywordsApplied,
+  regionLabel,
+  latestMetrics,
 }: {
   project: any;
   onSaved: () => void;
@@ -27,6 +30,13 @@ export default function ProjectHeader({
   onRegionChange: (m: RegionMode) => void;
   onCompetitorsSuggested?: (c: SuggestedCompetitor[]) => void;
   onSeedKeywordsApplied?: (seeds: string[]) => Promise<void> | void;
+  /** v1.1.32: human-readable region label, passed through from Dashboard so
+   *  the Export Full Report PDF cover page can show it without re-deriving. */
+  regionLabel?: string;
+  /** v1.1.33: latest SnapshotMetrics — used by the Copy PPT Prompt button to
+   *  build a fully-populated slide-generation prompt. Typed loosely (`any`)
+   *  to avoid coupling the header to the metrics module. */
+  latestMetrics?: any;
 }) {
   const [clientUrl, setClientUrl] = useState(project.client_url);
   const [brand, setBrand] = useState(project.brand_name);
@@ -40,6 +50,14 @@ export default function ProjectHeader({
   });
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
+  // v1.1.32: full-report PDF export state. Lives at the header level so the
+  // button can show a loading label without re-rendering the whole dashboard.
+  const [exportingReport, setExportingReport] = useState(false);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+  // v1.1.33: PPT prompt copy state. Same pattern — local UI state so the
+  // toast-style confirmation doesn't bounce render through the whole tree.
+  const [copyingPrompt, setCopyingPrompt] = useState(false);
+  const [promptMsg, setPromptMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setClientUrl(project.client_url);
@@ -99,6 +117,83 @@ export default function ProjectHeader({
       setSaveMsg(e.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  /**
+   * v1.1.32: Snapshot the entire dashboard panel container to a multi-page
+   * PDF. We locate the dashboard wrapper via the data-aio-report-root attribute
+   * that Dashboard.tsx attaches to its root element. Capturing per-section
+   * (handled inside exportFullReportToPdf) keeps charts intact across page
+   * breaks.
+   */
+  async function exportReport() {
+    if (exportingReport) return;
+    setExportingReport(true);
+    setExportMsg(null);
+    try {
+      const root = typeof document !== "undefined"
+        ? (document.querySelector('[data-aio-report-root="true"]') as HTMLElement | null)
+        : null;
+      if (!root) throw new Error("Dashboard not found on page.");
+      await exportFullReportToPdf(root, {
+        brand_name: project.brand_name,
+        client_url: project.client_url,
+        region_label: regionLabel ?? "—",
+      });
+      setExportMsg("Report exported.");
+    } catch (e: any) {
+      console.error("Full report export failed", e);
+      setExportMsg(`Export failed: ${e.message ?? "unknown error"}`);
+    } finally {
+      setExportingReport(false);
+    }
+  }
+
+  /**
+   * v1.1.33: Build a PPT slide-generation prompt from the live snapshot and
+   * write it to the clipboard so the user can paste it into Claude / Copilot
+   * / ChatGPT inside PowerPoint. The prompt tells the receiving AI to MATCH
+   * THE ACTIVE DECK's style (fonts, colors, masters) rather than hardcoding
+   * a look — that way a single button works regardless of which client deck
+   * the user is editing.
+   *
+   * Auto-clears the toast after 4s so the header doesn't accumulate stale
+   * confirmation text on repeat clicks.
+   */
+  async function copyPptPrompt() {
+    if (copyingPrompt) return;
+    setCopyingPrompt(true);
+    setPromptMsg(null);
+    try {
+      const prompt = buildPptPrompt(latestMetrics ?? null, {
+        brand_name: project.brand_name,
+        client_url: project.client_url,
+        region_label: regionLabel ?? "—",
+        // Light-touch universe hint: derive from segment l3 / l2 / l1 if present.
+        // The receiving AI uses this in the slide title, e.g. "AIO landscape — TRT/HRT keyword set".
+        universe_label: project.segment_l3 ?? project.segment_l2 ?? project.segment_l1 ?? undefined,
+      });
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(prompt);
+        setPromptMsg("Prompt copied — paste into Claude/Copilot/ChatGPT inside PowerPoint.");
+      } else {
+        // Fallback: surface the prompt in a new tab as plaintext so the user can copy it manually.
+        const w = typeof window !== "undefined" ? window.open("", "_blank") : null;
+        if (w) {
+          w.document.write(`<pre style="white-space:pre-wrap;font:14px monospace;padding:20px">${prompt.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c))}</pre>`);
+          setPromptMsg("Clipboard unavailable — prompt opened in a new tab to copy manually.");
+        } else {
+          throw new Error("Clipboard unavailable and popup blocked.");
+        }
+      }
+      // Auto-clear toast after 4s
+      setTimeout(() => setPromptMsg(null), 4000);
+    } catch (e: any) {
+      console.error("PPT prompt copy failed", e);
+      setPromptMsg(`Copy failed: ${e.message ?? "unknown error"}`);
+    } finally {
+      setCopyingPrompt(false);
     }
   }
 
@@ -164,6 +259,36 @@ export default function ProjectHeader({
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
+        {/* v1.1.33: Copy a PPT slide-generation prompt to clipboard. Pulls
+            live snapshot data and emits a long-form prompt the user pastes
+            into Claude / Copilot / ChatGPT inside PowerPoint to spin up two
+            slides (AIO Landscape + Cluster Opportunity Map) that match the
+            currently-open deck's style. */}
+        <button
+          style={ghostBtnStyle(copyingPrompt || !latestMetrics)}
+          disabled={copyingPrompt || !latestMetrics}
+          onClick={copyPptPrompt}
+          title={latestMetrics
+            ? "Copy a slide-generation prompt for AIO Landscape + Cluster Opportunity Map. Paste into Claude/Copilot/ChatGPT inside PowerPoint."
+            : "Run a refresh first — there's no snapshot data to build a prompt from yet."}
+        >
+          <i className="ti ti-clipboard-text" style={{ fontSize: 14 }} aria-hidden="true"></i>
+          {copyingPrompt ? "Copying…" : "Copy PPT Prompt"}
+        </button>
+        {/* v1.1.32: Export full report — captures the whole dashboard (Story,
+            Share of Voice, Charts, Clusters, AIO Opportunities, Drilldown,
+            Brand Comparison, etc.) to a multi-page PDF using a per-section
+            html2canvas snapshot. Ghost-style so it doesn't compete with the
+            primary "Run refresh" CTA. */}
+        <button
+          style={ghostBtnStyle(exportingReport)}
+          disabled={exportingReport}
+          onClick={exportReport}
+          title="Export the full dashboard (all panels) as a multi-page PDF report"
+        >
+          <i className="ti ti-file-download" style={{ fontSize: 14 }} aria-hidden="true"></i>
+          {exportingReport ? "Building PDF…" : "Export Full Report"}
+        </button>
         {dirty && (
           <button
             style={accentBtnStyle(saving)}
@@ -180,6 +305,31 @@ export default function ProjectHeader({
       </div>
 
       {saveMsg && <div className="text-xs muted mt-3">{saveMsg}</div>}
+      {exportMsg && <div className="text-xs muted mt-2">{exportMsg}</div>}
+      {promptMsg && (
+        <div
+          aria-live="polite"
+          style={{
+            marginTop: 8,
+            padding: "6px 11px",
+            borderRadius: 8,
+            background: "rgba(37,224,206,0.08)",
+            border: "1px solid rgba(37,224,206,0.30)",
+            color: "#25e0ce",
+            fontSize: 12,
+            fontWeight: 500,
+            width: "fit-content",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            marginLeft: "auto",
+            float: "right",
+          }}
+        >
+          <i className="ti ti-clipboard-check" style={{ fontSize: 14 }} aria-hidden="true"></i>
+          {promptMsg}
+        </div>
+      )}
     </div>
   );
 }
