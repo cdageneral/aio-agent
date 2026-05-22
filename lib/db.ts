@@ -4,6 +4,7 @@
  */
 import "server-only";
 import { sql } from "@vercel/postgres";
+import { classifyKeywords, type KeywordKind } from "./keywordKind";
 
 export type SuggestedCompetitor = { name: string; domain: string };
 
@@ -43,6 +44,10 @@ export type Keyword = {
   source: "organic" | "market" | "manual" | "seed";
   monthly_volume: number | null;
   cluster_label: string | null;
+  /** v1.1.27: 'branded' if the keyword text matches the client's brand
+   *  name / alias / domain stem on a word boundary, else 'non_branded'.
+   *  NULL only on legacy rows that predate this column. */
+  keyword_kind: KeywordKind | null;
   added_at: string;
 };
 
@@ -192,21 +197,81 @@ export async function deleteCompetitor(id: string): Promise<void> {
 }
 
 // -------- Keywords --------
+/**
+ * Bulk-insert keywords, auto-classifying each one as branded vs non_branded
+ * against the project's current brand identity (brand_name + brand_aliases +
+ * client_domain stem). Returns count of newly inserted rows.
+ *
+ * v1.1.27: keyword_kind is set at insert time so the dashboard's branded /
+ * non-branded toggle works immediately — without waiting for a full
+ * reclassifyKeywords pass.
+ */
 export async function addKeywords(
   project_id: string,
   items: { keyword: string; source: Keyword["source"] }[],
 ): Promise<number> {
   if (items.length === 0) return 0;
-  // Bulk insert with ON CONFLICT DO NOTHING.
-  const values = items.map((_, i) => `($1, $${i * 2 + 2}, $${i * 2 + 3})`).join(", ");
+
+  // Pull the project's brand identity so we can classify inline.
+  const project = await getProject(project_id);
+  const kinds: KeywordKind[] = project
+    ? classifyKeywords(
+        items.map((i) => i.keyword.trim()),
+        {
+          brand_name: project.brand_name,
+          brand_aliases: project.brand_aliases ?? [],
+          client_domain: project.client_domain,
+        },
+      )
+    : items.map(() => "non_branded" as const);
+
+  // Bulk insert with ON CONFLICT DO NOTHING. 3 params per row now: keyword,
+  // source, keyword_kind.
+  const values = items
+    .map((_, i) => `($1, $${i * 3 + 2}, $${i * 3 + 3}, $${i * 3 + 4})`)
+    .join(", ");
   const params: any[] = [project_id];
-  for (const it of items) params.push(it.keyword.trim(), it.source);
+  for (let i = 0; i < items.length; i++) {
+    params.push(items[i].keyword.trim(), items[i].source, kinds[i]);
+  }
   const { rowCount } = await sql.query(
-    `INSERT INTO keywords (project_id, keyword, source) VALUES ${values}
+    `INSERT INTO keywords (project_id, keyword, source, keyword_kind) VALUES ${values}
      ON CONFLICT (project_id, keyword) DO NOTHING;`,
     params,
   );
   return rowCount ?? 0;
+}
+
+/**
+ * Recompute keyword_kind for every keyword belonging to a project. Called when
+ * the project's brand identity changes (brand_name, brand_aliases, or
+ * client_domain patched) — and as a one-shot backfill for legacy rows where
+ * keyword_kind is still NULL.
+ *
+ * Idempotent. Returns count of rows updated.
+ */
+export async function reclassifyKeywords(project_id: string): Promise<number> {
+  const project = await getProject(project_id);
+  if (!project) return 0;
+  const { rows } = await sql<{ id: string; keyword: string; keyword_kind: KeywordKind | null }>`
+    SELECT id, keyword, keyword_kind FROM keywords WHERE project_id = ${project_id};
+  `;
+  if (rows.length === 0) return 0;
+  const kinds = classifyKeywords(
+    rows.map((r) => r.keyword),
+    {
+      brand_name: project.brand_name,
+      brand_aliases: project.brand_aliases ?? [],
+      client_domain: project.client_domain,
+    },
+  );
+  let updated = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].keyword_kind === kinds[i]) continue; // skip no-ops
+    await sql`UPDATE keywords SET keyword_kind = ${kinds[i]} WHERE id = ${rows[i].id};`;
+    updated += 1;
+  }
+  return updated;
 }
 
 export async function listKeywords(project_id: string): Promise<Keyword[]> {
@@ -317,9 +382,9 @@ export async function saveMentions(rows: {
 
 export async function loadSnapshotDetail(snapshot_id: string) {
   const { rows: serps } = await sql<{
-    id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null; source: string | null; monthly_volume: number | null; cluster_label: string | null;
+    id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null; source: string | null; monthly_volume: number | null; cluster_label: string | null; keyword_kind: KeywordKind | null;
   }>`
-    SELECT sr.id, sr.keyword, sr.country, sr.has_aio, sr.aio_text, k.source, k.monthly_volume, k.cluster_label
+    SELECT sr.id, sr.keyword, sr.country, sr.has_aio, sr.aio_text, k.source, k.monthly_volume, k.cluster_label, k.keyword_kind
     FROM serp_results sr
     LEFT JOIN keywords k ON k.project_id = sr.project_id AND k.keyword = sr.keyword
     WHERE sr.snapshot_id = ${snapshot_id};`;

@@ -26,6 +26,7 @@ export default function QuickWinsPanel({
   clientBrand,
   clusterFilter,
   onClusterFilterChange,
+  kindFilter = "all",
   refreshNonce = 0,
 }: {
   projectId: string;
@@ -34,6 +35,8 @@ export default function QuickWinsPanel({
   /** Controlled cluster filter — Dashboard owns this so clicking a cluster card pushes through here. */
   clusterFilter: string;
   onClusterFilterChange: (v: string) => void;
+  /** v1.1.27: branded/non-branded scope. "all" = no filter. */
+  kindFilter?: "all" | "branded" | "non_branded";
   /** v1.1.15: increments when the parent's metrics reload OR a refresh
    *  completes. Listening here forces a re-fetch so AIO Opportunities
    *  reflects the just-landed snapshot instead of stale data. */
@@ -48,12 +51,13 @@ export default function QuickWinsPanel({
     // Pull a bigger window so client-side cluster filtering has enough rows
     // to slice. Display still caps at the top N after filtering.
     const params = new URLSearchParams({ region: regionsForMode(region).join(","), limit: "60" });
+    if (kindFilter !== "all") params.set("kind", kindFilter);
     const res = await fetch(`/api/projects/${projectId}/quick-wins?${params.toString()}`, { cache: "no-store" });
     const j = await res.json();
     setWins(j.opportunities ?? []);
     setTotal(j.total_opportunities ?? 0);
     setLoading(false);
-  }, [projectId, region]);
+  }, [projectId, region, kindFilter]);
 
   useEffect(() => { load(); }, [load, refreshNonce]);
 

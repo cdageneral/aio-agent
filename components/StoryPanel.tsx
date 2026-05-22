@@ -117,6 +117,28 @@ export default function StoryPanel({
         Owning a slot in those AIOs is the new front of the click-vs-no-click fight.
       </p>
 
+      {/* v1.1.27: branded vs non-branded coverage split. Only shown when in
+          "All" scope (when filtered, the toggle header already communicates
+          which slice we're looking at) and when both buckets have data. */}
+      {latest.kind_in_view === "all" && (latest.total_keywords_branded + latest.total_keywords_non_branded) > 0 && (() => {
+        const nbCoverage = latest.total_keywords_non_branded > 0
+          ? latest.total_aios_triggered_non_branded / latest.total_keywords_non_branded
+          : 0;
+        const bCoverage = latest.total_keywords_branded > 0
+          ? latest.total_aios_triggered_branded / latest.total_keywords_branded
+          : 0;
+        return (
+          <p className="mt-3 text-[14px] leading-relaxed" style={{ color: "var(--text)" }}>
+            <span className="muted">Branded vs non-branded — </span>
+            AIOs appear on <strong className="font-semibold" style={{ color: "#25e0ce" }}>{fmtPct(nbCoverage)}</strong>{" "}
+            of <strong>non-branded</strong> queries ({latest.total_aios_triggered_non_branded.toLocaleString()} of {latest.total_keywords_non_branded.toLocaleString()}),{" "}
+            vs <strong className="font-semibold" style={{ color: "#a878ff" }}>{fmtPct(bCoverage)}</strong>{" "}
+            of <strong>branded</strong> queries ({latest.total_aios_triggered_branded.toLocaleString()} of {latest.total_keywords_branded.toLocaleString()}).{" "}
+            <span className="muted">Non-branded is where AIO actually competes for clicks — toggle the scope above to focus the dashboard on either slice.</span>
+          </p>
+        );
+      })()}
+
       {(strongest || weakest || battleground) && (
         <p className="mt-3 text-[15px] leading-relaxed" style={{ color: "var(--text)" }}>
           <span className="muted">By topic — </span>

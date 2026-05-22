@@ -44,11 +44,16 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const regionParam = url.searchParams.get("region");
   const regions = regionParam ? regionParam.split(",").map((r) => r.trim().toLowerCase()) : null;
   const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "20", 10), 1), 100);
+  // v1.1.27: optional ?kind=branded|non_branded — scopes the gap list to one
+  // half of the keyword universe.
+  const kindParam = url.searchParams.get("kind");
+  const kindFilter: "branded" | "non_branded" | null =
+    kindParam === "branded" || kindParam === "non_branded" ? kindParam : null;
 
   const { rows: serps } = await sql<{
-    id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null; source: string | null; cluster_label: string | null;
+    id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null; source: string | null; cluster_label: string | null; keyword_kind: string | null;
   }>`
-    SELECT sr.id, sr.keyword, sr.country, sr.has_aio, sr.aio_text, k.source, k.cluster_label
+    SELECT sr.id, sr.keyword, sr.country, sr.has_aio, sr.aio_text, k.source, k.cluster_label, k.keyword_kind
     FROM serp_results sr
     LEFT JOIN keywords k ON k.project_id = sr.project_id AND k.keyword = sr.keyword
     WHERE sr.snapshot_id = ${snap.id} AND sr.has_aio = TRUE;`;
@@ -77,7 +82,10 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 
   const competitors = await listCompetitors(project.id);
-  const filtered = regions ? serps.filter((s) => regions.includes(s.country.toLowerCase())) : serps;
+  let filtered = regions ? serps.filter((s) => regions.includes(s.country.toLowerCase())) : serps;
+  if (kindFilter) {
+    filtered = filtered.filter((s) => s.keyword_kind === kindFilter);
+  }
 
   const opportunities: QuickWin[] = [];
 

@@ -58,6 +58,10 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   // Drilldown panels. Clicking a card sets it; the dropdowns in the lower
   // panels read it. "all" disables filtering.
   const [clusterFilter, setClusterFilter] = useState<string>("all");
+  // v1.1.27: dashboard-wide branded vs non-branded scope. Drives the metrics
+  // fetch URL and is passed to QuickWinsPanel + KeywordExplorer so they slice
+  // to the same universe. "all" = no filter (default).
+  const [kindFilter, setKindFilter] = useState<"all" | "branded" | "non_branded">("all");
 
   // v1.1.10: gate region inference so it only fires on the very first metrics
   // load. The previous `data === null` check was a stale closure that could
@@ -78,6 +82,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ region: regionsForMode(region).join(",") });
+    if (kindFilter !== "all") params.set("kind", kindFilter);
     const res = await fetch(`/api/projects/${projectId}/metrics?${params.toString()}`, { cache: "no-store" });
     const j = await res.json();
     setData(j);
@@ -103,7 +108,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     // explicit user Refresh, so cluster cards still update (via setData) but
     // downstream panels don't unnecessarily re-fetch on every cluster cycle.
     setLoading(false);
-  }, [projectId, region]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, region, kindFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Persist the current suggested-competitors array to the project. Called
    *  whenever the user accepts, adds, or dismisses a suggestion so the DB
@@ -187,6 +192,17 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       />
 
       {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
+
+      {/* v1.1.27: branded vs non-branded scope toggle. Sits high in the layout
+          so users see it before they read any number — and so re-toggling it
+          immediately re-fetches metrics, drilldown, and opportunities. */}
+      <BrandedToggle
+        value={kindFilter}
+        onChange={setKindFilter}
+        branded={data.latest?.total_keywords_branded ?? 0}
+        nonBranded={data.latest?.total_keywords_non_branded ?? 0}
+      />
+
 
       {/* Inputs grouped together — all "things to configure before running a refresh"
           sit at the top, all results (Story, charts, clusters, drilldown) sit below. */}
@@ -373,6 +389,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           clientBrand={project.brand_name}
           clusterFilter={clusterFilter}
           onClusterFilterChange={setClusterFilter}
+          kindFilter={kindFilter}
           refreshNonce={refreshNonce}
         />
       </section>
@@ -388,6 +405,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           projectBrand={project.brand_name}
           clusterFilter={clusterFilter}
           onClusterFilterChange={setClusterFilter}
+          kindFilter={kindFilter}
           refreshNonce={refreshNonce}
         />
       </section>
@@ -401,6 +419,91 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <h2 className="h2 mb-3">Other domains in AIOs</h2>
         <OtherDomainsTabs latest={latest} />
       </section>
+    </div>
+  );
+}
+
+/**
+ * v1.1.27: branded vs non-branded scope toggle. Three buttons with counts so
+ * the user can see the split at a glance, even when filtered.
+ */
+function BrandedToggle({
+  value,
+  onChange,
+  branded,
+  nonBranded,
+}: {
+  value: "all" | "branded" | "non_branded";
+  onChange: (v: "all" | "branded" | "non_branded") => void;
+  branded: number;
+  nonBranded: number;
+}) {
+  const total = branded + nonBranded;
+  const options: { id: "all" | "branded" | "non_branded"; label: string; count: number; accent: string }[] = [
+    { id: "all", label: "All keywords", count: total, accent: "#8a93a6" },
+    { id: "non_branded", label: "Non-branded", count: nonBranded, accent: "#25e0ce" },
+    { id: "branded", label: "Branded", count: branded, accent: "#a878ff" },
+  ];
+  return (
+    <div
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 12px",
+        borderRadius: 10,
+        background: "rgba(20,24,32,0.55)",
+        border: "1px solid rgba(255,255,255,0.06)",
+        flexWrap: "wrap",
+      }}
+    >
+      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8a93a6", marginRight: 4 }}>
+        Scope
+      </span>
+      {options.map((o) => {
+        const active = value === o.id;
+        return (
+          <button
+            key={o.id}
+            onClick={() => onChange(o.id)}
+            type="button"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              padding: "6px 12px",
+              borderRadius: 8,
+              fontSize: 12.5,
+              fontWeight: 600,
+              cursor: "pointer",
+              transition: "background 120ms ease, border-color 120ms ease",
+              background: active ? `${o.accent}22` : "transparent",
+              color: active ? o.accent : "#d6dbe6",
+              border: `1px solid ${active ? `${o.accent}66` : "rgba(255,255,255,0.10)"}`,
+            }}
+          >
+            <span>{o.label}</span>
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                padding: "1px 7px",
+                borderRadius: 999,
+                background: active ? `${o.accent}33` : "rgba(255,255,255,0.06)",
+                color: active ? o.accent : "#8a93a6",
+              }}
+            >
+              {o.count.toLocaleString()}
+            </span>
+          </button>
+        );
+      })}
+      {value !== "all" && (
+        <span style={{ fontSize: 11.5, color: "#8a93a6", marginLeft: "auto" }}>
+          Dashboard scoped to <strong style={{ color: "#d6dbe6" }}>{value === "branded" ? "branded" : "non-branded"}</strong> keywords.
+          All metrics, opportunities, and drilldown below are filtered.
+        </span>
+      )}
     </div>
   );
 }

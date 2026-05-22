@@ -20,6 +20,7 @@
 
 import { domainMatches, normalizeDomain } from "./domain";
 import { classifyDomain, SourceType } from "./classify";
+import type { KeywordKind } from "./keywordKind";
 
 export interface SerpResultRow {
   id: string;
@@ -30,6 +31,8 @@ export interface SerpResultRow {
   source: "organic" | "market" | "manual" | "seed" | null;
   monthly_volume?: number | null;
   cluster_label?: string | null;
+  /** v1.1.27: branded vs non-branded. null = legacy row, pre-backfill. */
+  keyword_kind?: KeywordKind | null;
 }
 
 export interface CitationRow {
@@ -72,6 +75,17 @@ export interface SnapshotMetrics {
   total_keywords_organic: number;
   total_aios_triggered: number;
   total_aios_triggered_organic: number;
+  /** v1.1.27: branded/non-branded splits.
+   *  These are always reported on the FULL scoped universe regardless of the
+   *  kind filter — they're descriptive stats about the split, not stats inside
+   *  the filtered slice. The filter, when set, scopes everything else in the
+   *  payload (brand citation rates, SOV, clusters, etc.). */
+  total_keywords_branded: number;
+  total_keywords_non_branded: number;
+  total_aios_triggered_branded: number;
+  total_aios_triggered_non_branded: number;
+  /** Which kind filter produced the rest of the metrics in this payload. */
+  kind_in_view: "all" | KeywordKind;
   brands: BrandMetrics[];
   /** Domains that aren't the client or a tracked competitor, ranked by citation count. */
   other_domains: { domain: string; count: number; source_type: SourceType }[];
@@ -118,11 +132,28 @@ export function computeSnapshotMetrics(
   serps: SerpResultRow[],
   citationsBySerpId: Map<string, CitationRow[]>,
   brands: BrandSpec[],
-  opts: { regions?: string[] } = {},
+  opts: { regions?: string[]; kind?: "all" | KeywordKind } = {},
 ): SnapshotMetrics {
   // Optional region filter — if provided, restrict the universe to those countries.
   const regionFilter = opts.regions && opts.regions.length > 0 ? new Set(opts.regions.map((r) => r.toLowerCase())) : null;
-  const scoped = regionFilter ? serps.filter((s) => regionFilter.has(s.country.toLowerCase())) : serps;
+  const regionScoped = regionFilter ? serps.filter((s) => regionFilter.has(s.country.toLowerCase())) : serps;
+
+  // v1.1.27: branded/non-branded split — always computed on the region-scoped
+  // universe, before the kind filter is applied. These are descriptive stats
+  // about the split for the Story strip; the kind filter scopes everything
+  // else but the descriptive split itself stays whole.
+  const total_keywords_branded = regionScoped.filter((s) => s.keyword_kind === "branded").length;
+  const total_keywords_non_branded = regionScoped.filter((s) => s.keyword_kind === "non_branded").length;
+  const total_aios_triggered_branded = regionScoped.filter((s) => s.has_aio && s.keyword_kind === "branded").length;
+  const total_aios_triggered_non_branded = regionScoped.filter((s) => s.has_aio && s.keyword_kind === "non_branded").length;
+
+  // Now apply the optional kind filter to produce the working slice that
+  // drives all the headline numbers below (brands / SOV / clusters).
+  const kind: "all" | KeywordKind = opts.kind ?? "all";
+  const scoped = kind === "all"
+    ? regionScoped
+    : regionScoped.filter((s) => s.keyword_kind === kind);
+
   const total_keywords = scoped.length;
   const total_keywords_organic = scoped.filter((s) => s.source === "organic").length;
   const aioSerps = scoped.filter((s) => s.has_aio);
@@ -363,6 +394,11 @@ export function computeSnapshotMetrics(
     total_keywords_organic,
     total_aios_triggered,
     total_aios_triggered_organic,
+    total_keywords_branded,
+    total_keywords_non_branded,
+    total_aios_triggered_branded,
+    total_aios_triggered_non_branded,
+    kind_in_view: kind,
     brands: brandMetrics,
     other_domains,
     source_type_breakdown,

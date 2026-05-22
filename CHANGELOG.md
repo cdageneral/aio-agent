@@ -4,6 +4,28 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.27] — 2026-05-22
+
+Branded vs non-branded keyword scope — see how AIO coverage looks for the queries that matter.
+
+### Added
+- **`keyword_kind` column** on `keywords` table — every keyword is now classified as `branded` or `non_branded` based on whether the keyword text contains the client's brand name, brand alias, or domain stem on a word boundary. Idempotent SQL migration; no manual step required.
+- **`lib/keywordKind.ts`** classifier — pure regex, case-insensitive, word-bounded. Skips 1–2 character brand stems to avoid false positives (e.g. won't match "X" inside random words). Verified with 12 test cases (CITI, Citibank, "citizen watch" false-match avoidance, etc.).
+- **Auto-classification on every keyword insert** — `addKeywords()` pulls the project's brand identity and sets `keyword_kind` inline.
+- **Re-classification on project PATCH** — when `brand_name`, `brand_aliases`, or `client_domain` changes, every existing keyword for that project gets re-evaluated. Called as a non-fatal side effect — the patch succeeds even if reclassify fails.
+- **Opportunistic backfill in `/api/projects/[id]/metrics`** — if any rows have NULL `keyword_kind` (legacy projects), runs `reclassifyKeywords()` once. Idempotent + cheap; no UI step needed.
+- **Branded vs non-branded scope toggle** in Dashboard — three buttons (All / Non-branded / Branded) with live counts. Drives the metrics fetch URL plus `kindFilter` props on `QuickWinsPanel` and `KeywordExplorer` so the entire dashboard slices to the same universe. Toggle stays visible above the chart panel.
+- **Story strip split line** — when scope is "All", adds a line showing AIO coverage for both halves of the universe ("AIOs appear on X% of non-branded queries, vs Y% of branded queries"). Hidden when scope is already narrowed.
+- **Metrics payload now reports** `total_keywords_branded`, `total_keywords_non_branded`, `total_aios_triggered_branded`, `total_aios_triggered_non_branded`, and `kind_in_view`. The split counts are always on the FULL region-scoped universe so the toggle counts stay honest even when filtered.
+- **`?kind=branded|non_branded`** query parameter on `/api/projects/[id]/metrics`, `/api/projects/[id]/keywords/detail`, and `/api/projects/[id]/quick-wins`. Defaults to "all" (no filtering) — fully backward compatible.
+
+### Why
+Branded queries ("citi double cash card") almost always rank you #1 organically and trigger AIO less often, so they inflate "coverage" metrics without representing real competitive risk. Non-branded queries ("best cash back credit card") are where AIO actually steals clicks and where your share matters. Mixing them hid the real story.
+
+### Notes
+- Classification is pure regex against `brand_name + brand_aliases + domain_stem` — no LLM, no extra cost.
+- Manual override (per-keyword re-label) is intentionally NOT in this release. If the classifier mis-labels a keyword you care about, edit the brand_aliases on the project to add a missing variant — every keyword reclassifies on patch.
+
 ## [1.1.26] — 2026-05-13
 
 Stop the post-cluster cascade — dashboard no longer refreshes everything every few seconds.

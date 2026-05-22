@@ -69,9 +69,17 @@ CREATE TABLE IF NOT EXISTS keywords (
 ALTER TABLE keywords ADD COLUMN IF NOT EXISTS monthly_volume INTEGER;
 -- Topical cluster label, set by LLM clustering. NULL until the user clusters.
 ALTER TABLE keywords ADD COLUMN IF NOT EXISTS cluster_label TEXT;
+-- v1.1.27: branded vs non-branded classification, derived from the project's
+-- brand_name + brand_aliases + client_domain stem. Recomputed on every keyword
+-- insert and whenever the project's brand identity is patched. NULL = not yet
+-- classified (older rows from before this column existed); fresh inserts always
+-- get a value.
+ALTER TABLE keywords ADD COLUMN IF NOT EXISTS keyword_kind TEXT
+  CHECK (keyword_kind IN ('branded','non_branded'));
 
 CREATE INDEX IF NOT EXISTS idx_keywords_project ON keywords(project_id);
 CREATE INDEX IF NOT EXISTS idx_keywords_cluster ON keywords(project_id, cluster_label);
+CREATE INDEX IF NOT EXISTS idx_keywords_kind    ON keywords(project_id, keyword_kind);
 
 -- ----------------------------------------------------------------
 -- snapshots: one per refresh click. Aggregate row.

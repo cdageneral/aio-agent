@@ -30,12 +30,16 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const regions = regionParam
     ? regionParam.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean)
     : null;
+  // v1.1.27: optional ?kind=branded|non_branded scopes the drilldown table.
+  const kindParam = url.searchParams.get("kind");
+  const kindFilter: "branded" | "non_branded" | null =
+    kindParam === "branded" || kindParam === "non_branded" ? kindParam : null;
 
-  // Pull every serp_result row + its keyword source + region + cluster label.
+  // Pull every serp_result row + its keyword source + region + cluster + kind.
   const { rows: serps } = await sql<{
-    id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null; source: string | null; cluster_label: string | null;
+    id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null; source: string | null; cluster_label: string | null; keyword_kind: string | null;
   }>`
-    SELECT sr.id, sr.keyword, sr.country, sr.has_aio, sr.aio_text, k.source, k.cluster_label
+    SELECT sr.id, sr.keyword, sr.country, sr.has_aio, sr.aio_text, k.source, k.cluster_label, k.keyword_kind
     FROM serp_results sr
     LEFT JOIN keywords k ON k.project_id = sr.project_id AND k.keyword = sr.keyword
     WHERE sr.snapshot_id = ${snap.id}
@@ -75,7 +79,10 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     ...competitors.map((c) => ({ brand_name: c.brand_name, domain: c.domain, kind: "competitor" as const })),
   ];
 
-  const filtered = regions ? serps.filter((s) => regions.includes(s.country.toLowerCase())) : serps;
+  let filtered = regions ? serps.filter((s) => regions.includes(s.country.toLowerCase())) : serps;
+  if (kindFilter) {
+    filtered = filtered.filter((s) => s.keyword_kind === kindFilter);
+  }
 
   const keywords = filtered.map((s) => {
     const citations = citesByResult.get(s.id) ?? [];
@@ -111,6 +118,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       country: s.country,
       source: s.source,
       cluster_label: s.cluster_label,
+      keyword_kind: s.keyword_kind,
       has_aio: s.has_aio,
       aio_text: s.aio_text,
       citations,

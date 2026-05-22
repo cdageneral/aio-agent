@@ -56,6 +56,7 @@ export default function KeywordExplorer({
   projectBrand,
   clusterFilter,
   onClusterFilterChange,
+  kindFilter = "all",
   refreshNonce = 0,
 }: {
   projectId: string;
@@ -64,6 +65,8 @@ export default function KeywordExplorer({
   /** Controlled cluster filter, owned by Dashboard. */
   clusterFilter: string;
   onClusterFilterChange: (v: string) => void;
+  /** v1.1.27: branded/non-branded scope from the dashboard-level toggle. */
+  kindFilter?: "all" | "branded" | "non_branded";
   /** v1.1.15: increments when the parent's metrics reload OR a refresh
    *  completes. Forces this panel to refetch /keywords/detail so the
    *  Drilldown reflects the just-landed snapshot. */
@@ -79,11 +82,12 @@ export default function KeywordExplorer({
   const load = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ region: regionsForMode(region).join(",") });
+    if (kindFilter !== "all") params.set("kind", kindFilter);
     const res = await fetch(`/api/projects/${projectId}/keywords/detail?${params.toString()}`, { cache: "no-store" });
     const j = await res.json();
     setData({ keywords: j.keywords ?? [], tracked: j.tracked ?? [] });
     setLoading(false);
-  }, [projectId, region]);
+  }, [projectId, region, kindFilter]);
 
   useEffect(() => { load(); }, [load, refreshNonce]);
 

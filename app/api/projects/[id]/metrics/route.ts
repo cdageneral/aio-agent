@@ -5,6 +5,7 @@
  *   - growth rate vs prior snapshot
  */
 import { NextRequest, NextResponse } from "next/server";
+import { sql } from "@vercel/postgres";
 import {
   countKeywords,
   getProject,
@@ -12,10 +13,18 @@ import {
   listCompetitors,
   listSnapshots,
   loadSnapshotDetail,
+  reclassifyKeywords,
 } from "@/lib/db";
 import { computeSnapshotMetrics, growthRate, BrandSpec, CitationRow, SerpResultRow } from "@/lib/metrics";
+import type { KeywordKind } from "@/lib/keywordKind";
 
 export const runtime = "nodejs";
+
+/** v1.1.27: parse ?kind= into one of three modes. Defaults to "all". */
+function parseKind(raw: string | null): "all" | KeywordKind {
+  if (raw === "branded" || raw === "non_branded") return raw;
+  return "all";
+}
 
 export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const project = await getProject(ctx.params.id);
@@ -27,6 +36,26 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const regions = regionParam
     ? regionParam.split(",").map((r) => r.trim().toLowerCase()).filter(Boolean)
     : (project.regions ?? ["us"]);
+
+  // v1.1.27: ?kind=all|branded|non_branded (default all)
+  const kindFilter = parseKind(url.searchParams.get("kind"));
+
+  // v1.1.27: opportunistic backfill. Older projects (created before this column
+  // existed) will have NULL keyword_kind on their existing rows; classify them
+  // once now so the toggle works without forcing the user to re-add keywords.
+  // Idempotent + cheap: only runs the UPDATE when nulls actually exist.
+  try {
+    const { rows: nullCount } = await sql<{ c: number }>`
+      SELECT COUNT(*)::int AS c FROM keywords
+      WHERE project_id = ${project.id} AND keyword_kind IS NULL;`;
+    if ((nullCount[0]?.c ?? 0) > 0) {
+      await reclassifyKeywords(project.id);
+    }
+  } catch (e) {
+    // Non-fatal — dashboard still loads; toggle just shows everything as
+    // non-branded until the next keyword insert / PATCH triggers a real pass.
+    console.error("[metrics] kind backfill failed (non-fatal):", e);
+  }
 
   const [competitors, snapshots, keywords_count] = await Promise.all([
     listCompetitors(project.id),
@@ -67,7 +96,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       arr.push(c);
       citesById.set(c.serp_result_id, arr);
     }
-    const m = computeSnapshotMetrics(serps as SerpResultRow[], citesById, brands, { regions });
+    const m = computeSnapshotMetrics(serps as SerpResultRow[], citesById, brands, { regions, kind: kindFilter });
     series.push({
       snapshot_id: snap.id,
       ran_at: snap.ran_at,
@@ -94,7 +123,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       arr.push(c);
       citesById.set(c.serp_result_id, arr);
     }
-    latest = computeSnapshotMetrics(serps as SerpResultRow[], citesById, brands);
+    latest = computeSnapshotMetrics(serps as SerpResultRow[], citesById, brands, { kind: kindFilter });
   }
 
   // Period-over-period growth (latest vs previous completed)
@@ -125,6 +154,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     series,
     growth,
     regions_in_view: regions,
+    kind_in_view: kindFilter,
     keywords_count,
   });
 }

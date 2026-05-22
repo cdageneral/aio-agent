@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { revalidatePath } from "next/cache";
-import { deleteProject, getProject, updateProject } from "@/lib/db";
+import { deleteProject, getProject, reclassifyKeywords, updateProject } from "@/lib/db";
 import { normalizeDomain } from "@/lib/domain";
 
 export const runtime = "nodejs";
@@ -33,6 +33,19 @@ export async function PATCH(req: NextRequest, ctx: { params: { id: string } }) {
 
   const updated = await updateProject(ctx.params.id, patch);
   if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  // v1.1.27: if the brand identity changed (name, aliases, or client domain),
+  // re-classify every keyword's branded/non-branded label so the dashboard
+  // toggle stays in sync. Cheap — pure regex, no LLM.
+  const brandTouched =
+    "brand_name" in patch || "brand_aliases" in patch || "client_domain" in patch;
+  if (brandTouched) {
+    try { await reclassifyKeywords(ctx.params.id); } catch (e) {
+      // Non-fatal — the legacy nulls just stay nulls until next insert/refresh.
+      console.error("[/api/projects/[id] PATCH] reclassify failed (non-fatal):", e);
+    }
+  }
+
   return NextResponse.json({ project: updated });
 }
 
