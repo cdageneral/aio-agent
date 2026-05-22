@@ -168,7 +168,12 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     }
   }
 
-  if (loading || !data) return <div className="text-sm muted">Loading…</div>;
+  // v1.1.29: only collapse to the full-page loader on the very FIRST load (when
+  // data is still null). Subsequent refetches — scope toggle, region change,
+  // any onChanged() trigger — keep the existing dashboard rendered with the
+  // previous data so the user's scroll position survives. A subtle inline
+  // "Updating…" pill near the top signals the refetch is in flight.
+  if (!data) return <div className="text-sm muted">Loading…</div>;
   const { project, competitors, latest, series, growth } = data;
 
   return (
@@ -192,6 +197,41 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       />
 
       {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
+
+      {/* v1.1.29: silent-refresh indicator. Appears when a refetch is in flight
+          on top of already-rendered data (e.g. user toggled scope). Sits high
+          enough to be acknowledged but doesn't reflow the layout, so the
+          user's scroll position is preserved through the toggle. */}
+      {loading && (
+        <div
+          aria-live="polite"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "5px 11px",
+            borderRadius: 999,
+            background: "rgba(37,224,206,0.10)",
+            border: "1px solid rgba(37,224,206,0.35)",
+            fontSize: 12,
+            color: "#25e0ce",
+            fontWeight: 500,
+            width: "fit-content",
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: 9, height: 9, borderRadius: "50%",
+              background: "#25e0ce",
+              animation: "aio-pulse 1.2s ease-in-out infinite",
+              display: "inline-block",
+            }}
+          ></span>
+          Updating…
+          <style>{`@keyframes aio-pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.3 } }`}</style>
+        </div>
+      )}
 
       {/* v1.1.28: the scope toggle was moved out of this top area and embedded
           inside StoryPanel, sitting directly above the pulse-card strip — it

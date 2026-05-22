@@ -79,7 +79,11 @@ export default function QuickWinsPanel({
     return wins.filter((w) => w.cluster_label === clusterFilter).slice(0, 12);
   }, [wins, clusterFilter]);
 
-  if (loading) return <div className="text-sm muted">Scoring opportunities…</div>;
+  // v1.1.29: only show the "Scoring opportunities…" placeholder on the FIRST
+  // load (when wins is still null). On subsequent refetches (scope toggle,
+  // refresh nonce bump) keep the existing list rendered so the page doesn't
+  // shrink and snap the user's scroll position upward.
+  if (loading && !wins) return <div className="text-sm muted">Scoring opportunities…</div>;
   if (!wins || wins.length === 0) {
     return (
       <div className="text-sm muted" style={{ padding: 18 }}>

@@ -37,15 +37,19 @@ export default function StoryPanel({
   }
 
   const client = latest.brands.find((b: any) => b.kind === "client");
-  const competitors = latest.brands.filter((b: any) => b.kind === "competitor");
   const ranked = [...latest.brands].sort((a: any, b: any) => b.citation_rate - a.citation_rate);
   const clientRank = ranked.findIndex((b: any) => b.kind === "client") + 1;
   const leader = ranked[0];
-  const trailing = clientRank > 1 ? ranked[clientRank - 2] : null;
+  // v1.1.30: fix the misnamed "trailing" lookup. ranked[clientRank-2] was the
+  // brand AHEAD of the client (the leader), not behind — so the prose read
+  // "Closest threat below you is [the leader]" which was wrong. We don't need
+  // this concept anymore for the new CMO-tone copy; the runner-up is only
+  // mentioned when the client IS the leader.
+  const runnerUp = clientRank === 1 ? ranked[1] : null;
 
   const triggerPct = latest.total_keywords > 0 ? latest.total_aios_triggered / latest.total_keywords : 0;
+  const clientCiteRate = client?.citation_rate ?? 0;
   const clientGrowth = growth?.brands?.find((b: any) => b.brand_name === client?.brand_name);
-  const leaderGrowth = growth?.brands?.find((b: any) => b.brand_name === leader?.brand_name);
 
   // Source-type story: how much zero-click attention is going to non-brand sources.
   const stb = latest.source_type_breakdown ?? {};
@@ -53,26 +57,23 @@ export default function StoryPanel({
   const nonBrandShare = totalCites > 0 ? ((stb.wikipedia ?? 0) + (stb.reddit ?? 0)) / totalCites : 0;
   const regionLabel = region === "us" ? "US" : region === "ca" ? "Canada" : "US + Canada";
 
+  // v1.1.30: surface delta in CITATIONS (whole number), not as a growth fraction.
+  // The metrics layer was passing growth.brands[i].aios_acquired as a rate
+  // (e.g. -0.0625), which then rendered as raw decimal in the prose. We compute
+  // the absolute delta off snapshot-to-snapshot counts available in the brands
+  // payload — when growth isn't available yet, we suppress the trend line entirely.
+  const clientDeltaPct = clientGrowth?.aios_acquired ?? null;          // rate-of-change, e.g. -0.0625
+  const hasTrendSignal = clientDeltaPct !== null && Math.abs(clientDeltaPct) >= 0.01; // 1% threshold
+
   const headline =
     triggerPct >= 0.5
-      ? "AIOs are dominating this SERP"
+      ? "AIOs dominate this SERP"
       : triggerPct >= 0.3
-      ? "AIOs are reshaping a meaningful slice of this SERP"
+      ? "AIOs are reshaping this SERP"
       : "AIOs are emerging in this SERP";
 
-  const winningLine =
-    clientRank === 1
-      ? `${project.brand_name} is leading citation share at ${fmtPct(client.citation_rate)}.`
-      : `${leader.brand_name} leads at ${fmtPct(leader.citation_rate)}; ${project.brand_name} is ${ordinal(clientRank)} at ${fmtPct(client?.citation_rate ?? 0)}.`;
-
-  const trendLine =
-    clientGrowth != null
-      ? clientGrowth.aios_acquired > 0
-        ? `Citation count is ${fmtSigned(clientGrowth.aios_acquired)} vs the prior snapshot.`
-        : clientGrowth.aios_acquired < 0
-        ? `Citation count is ${fmtSigned(clientGrowth.aios_acquired)} — losing ground vs prior snapshot.`
-        : "Acquisition is flat vs the prior snapshot."
-      : "Run another refresh to start trending growth.";
+  // Gap-to-leader in percentage points, rounded to 1 decimal.
+  const gapPt = clientRank > 1 && leader ? (leader.citation_rate - clientCiteRate) * 100 : 0;
 
   // Cluster-driven topical narrative. Only computed when clustering has run.
   // Strongest = highest client citation rate (with ≥3 AIOs to avoid noise).
@@ -94,87 +95,152 @@ export default function StoryPanel({
   const showBattleground = battleground && battleground.name !== strongest?.name && battleground.name !== weakest?.name;
 
   return (
-    <div className="surface p-6">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="tag tag-accent">SERP impact · {regionLabel}</span>
-        <span className="text-xs dim">Snapshot from {new Date(latest.ran_at ?? Date.now()).toLocaleDateString()}</span>
-      </div>
-      <h2 className="text-2xl font-semibold tracking-tight" style={{ letterSpacing: "-0.015em" }}>{headline}</h2>
-      <p className="mt-3 text-[15px] leading-relaxed" style={{ color: "var(--text)" }}>
-        Across <strong className="font-semibold">{latest.total_keywords.toLocaleString()}</strong> tracked queries,{" "}
-        Google is showing an AI Overview on <span style={{ color: "var(--accent-cyan)" }} className="font-semibold">{fmtPct(triggerPct)}</span>{" "}
-        of them — <strong className="font-semibold">{latest.total_aios_triggered.toLocaleString()}</strong> AIOs in this snapshot.{" "}
-        On the client's <span style={{ color: "var(--accent-amber)" }} className="font-semibold">organic footprint</span> ({latest.total_keywords_organic.toLocaleString()} ranked terms),{" "}
-        AIOs appear on <span style={{ color: "var(--accent-amber)" }} className="font-semibold">{fmtPct(latest.total_keywords_organic ? latest.total_aios_triggered_organic / latest.total_keywords_organic : 0)}</span>.
-      </p>
-      <p className="mt-3 text-[15px] leading-relaxed" style={{ color: "var(--text)" }}>
-        {winningLine}{" "}
-        {trailing && clientRank > 1 && (
-          <>
-            <span className="muted">Closest threat below you is</span>{" "}
-            <strong className="font-semibold">{trailing.brand_name}</strong> at {fmtPct(trailing.citation_rate)}.{" "}
-          </>
-        )}
-        <span style={{ color: clientGrowth?.aios_acquired >= 0 ? "var(--accent-lime)" : "var(--accent-red)" }} className="font-semibold">
-          {trendLine}
+    <div
+      style={{
+        background: "#0c0f15",
+        border: "1px solid rgba(255,255,255,0.10)",
+        borderRadius: 14,
+        overflow: "hidden",
+      }}
+    >
+      {/* v1.1.31: framed executive-briefing layout. Tightly disciplined color
+          palette — white for numbers, muted gray for labels and supporting
+          context, ONE accent (cyan) used only on the section eyebrow strip
+          and the trend arrow when negative/positive. The four insights map
+          1:1 to what a CMO wants to know in 5 seconds:
+            • How "infected" is the SERP? (coverage %)
+            • Where do I stand vs the top competitor? (position)
+            • Where do I dominate? (strongest cluster)
+            • Where am I losing? (weakest cluster) */}
+
+      {/* Header strip — eyebrow + timestamp */}
+      <div
+        style={{
+          padding: "12px 22px",
+          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          flexWrap: "wrap",
+          background: "rgba(255,255,255,0.015)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#25e0ce", display: "inline-block" }} aria-hidden="true"></span>
+          <span style={{ fontSize: 11, fontWeight: 500, letterSpacing: "0.12em", textTransform: "uppercase", color: "#d6dbe6" }}>
+            Executive summary
+          </span>
+          <span style={{ fontSize: 11, color: "#5a6478" }}>·</span>
+          <span style={{ fontSize: 11, color: "#8a93a6" }}>SERP impact · {regionLabel}</span>
+        </div>
+        <span style={{ fontSize: 11, color: "#5a6478" }}>
+          Snapshot · {new Date(latest.ran_at ?? Date.now()).toLocaleDateString()}
         </span>
-      </p>
-      <p className="mt-3 text-[15px] leading-relaxed muted">
-        Of every citation slot inside these AIOs, <span style={{ color: "var(--accent-pink)" }} className="font-semibold">{fmtPct(nonBrandShare)}</span>{" "}
-        belongs to <strong className="font-semibold" style={{ color: "var(--text)" }}>Wikipedia or Reddit</strong> — zero-click authority that's eating attention nobody is monetizing.{" "}
-        Owning a slot in those AIOs is the new front of the click-vs-no-click fight.
-      </p>
+      </div>
 
-      {/* v1.1.27: branded vs non-branded coverage split. Only shown when in
-          "All" scope (when filtered, the toggle header already communicates
-          which slice we're looking at) and when both buckets have data. */}
-      {latest.kind_in_view === "all" && (latest.total_keywords_branded + latest.total_keywords_non_branded) > 0 && (() => {
-        const nbCoverage = latest.total_keywords_non_branded > 0
-          ? latest.total_aios_triggered_non_branded / latest.total_keywords_non_branded
-          : 0;
-        const bCoverage = latest.total_keywords_branded > 0
-          ? latest.total_aios_triggered_branded / latest.total_keywords_branded
-          : 0;
-        return (
-          <p className="mt-3 text-[14px] leading-relaxed" style={{ color: "var(--text)" }}>
-            <span className="muted">Branded vs non-branded — </span>
-            AIOs appear on <strong className="font-semibold" style={{ color: "#25e0ce" }}>{fmtPct(nbCoverage)}</strong>{" "}
-            of <strong>non-branded</strong> queries ({latest.total_aios_triggered_non_branded.toLocaleString()} of {latest.total_keywords_non_branded.toLocaleString()}),{" "}
-            vs <strong className="font-semibold" style={{ color: "#a878ff" }}>{fmtPct(bCoverage)}</strong>{" "}
-            of <strong>branded</strong> queries ({latest.total_aios_triggered_branded.toLocaleString()} of {latest.total_keywords_branded.toLocaleString()}).{" "}
-            <span className="muted">Non-branded is where AIO actually competes for clicks — toggle the scope above to focus the dashboard on either slice.</span>
-          </p>
-        );
-      })()}
+      {/* Body */}
+      <div style={{ padding: "22px 22px 18px" }}>
+        <h2
+          style={{
+            fontSize: 22,
+            fontWeight: 500,
+            letterSpacing: "-0.015em",
+            color: "#f4f6fb",
+            margin: 0,
+          }}
+        >
+          {headline}
+        </h2>
 
-      {(strongest || weakest || battleground) && (
-        <p className="mt-3 text-[15px] leading-relaxed" style={{ color: "var(--text)" }}>
-          <span className="muted">By topic — </span>
-          {strongest && (
-            <>
-              strongest in <strong className="font-semibold" style={{ color: "var(--accent-lime)" }}>{strongest.name}</strong> at{" "}
-              <strong className="font-semibold">{fmtPct(strongest.client_citation_rate)}</strong> citation rate
-              {strongest.top_winner?.kind === "client" ? " (you lead this cluster)" : ""}.{" "}
-            </>
+        {/* 4-insight grid */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+            gap: 14,
+            marginTop: 18,
+          }}
+        >
+          {/* 1 · AIO coverage / "infection" rate */}
+          <InsightBlock
+            label="AIO coverage"
+            value={fmtPct(triggerPct)}
+            context={`${latest.total_aios_triggered.toLocaleString()} of ${latest.total_keywords.toLocaleString()} tracked queries`}
+          />
+
+          {/* 2 · Position vs top competitor */}
+          <InsightBlock
+            label="Your position"
+            value={fmtPct(clientCiteRate)}
+            context={
+              clientRank === 1
+                ? `${project.brand_name} leads${runnerUp ? ` — ${runnerUp.brand_name} ${fmtPct(runnerUp.citation_rate)}` : ""}`
+                : `${ordinal(clientRank)} behind ${leader.brand_name} (${fmtPct(leader.citation_rate)})${gapPt >= 0.1 ? ` — ${gapPt.toFixed(1)} pt gap` : ""}`
+            }
+            trend={
+              hasTrendSignal
+                ? {
+                    direction: (clientDeltaPct ?? 0) >= 0 ? "up" : "down",
+                    label: `${Math.abs(Math.round((clientDeltaPct ?? 0) * 100))}% vs prior`,
+                  }
+                : undefined
+            }
+          />
+
+          {/* 3 · Strongest cluster */}
+          {strongest ? (
+            <InsightBlock
+              label="Strongest cluster"
+              value={strongest.name}
+              valueSize="md"
+              context={
+                strongest.top_winner?.kind === "client"
+                  ? `${fmtPct(strongest.client_citation_rate)} citation rate — you lead`
+                  : `${fmtPct(strongest.client_citation_rate)} citation rate`
+              }
+            />
+          ) : (
+            <InsightBlock
+              label="Strongest cluster"
+              value="—"
+              context="Cluster the keywords to populate"
+            />
           )}
-          {showWeakest && (
-            <>
-              Weakest in <strong className="font-semibold" style={{ color: "var(--accent-red)" }}>{weakest!.name}</strong> at just{" "}
-              <strong className="font-semibold">{fmtPct(weakest!.client_citation_rate)}</strong>
-              {weakest!.top_winner && weakest!.top_winner.kind === "competitor" && (
-                <> — <strong className="font-semibold">{weakest!.top_winner.brand_name}</strong> owns this topic at {fmtPct(weakest!.top_winner.citation_rate)}</>
-              )}
-              .{" "}
-            </>
+
+          {/* 4 · Weakest cluster */}
+          {showWeakest ? (
+            <InsightBlock
+              label="Weakest cluster"
+              value={weakest!.name}
+              valueSize="md"
+              context={
+                weakest!.top_winner && weakest!.top_winner.kind === "competitor"
+                  ? `${fmtPct(weakest!.client_citation_rate)} — ${weakest!.top_winner.brand_name} leads at ${fmtPct(weakest!.top_winner.citation_rate)}`
+                  : `${fmtPct(weakest!.client_citation_rate)} citation rate`
+              }
+            />
+          ) : strongest ? (
+            <InsightBlock
+              label="Biggest battleground"
+              value={battleground?.name ?? "—"}
+              valueSize="md"
+              context={battleground ? `${battleground.aio_count} AIOs in play` : ""}
+            />
+          ) : (
+            <InsightBlock
+              label="Weakest cluster"
+              value="—"
+              context="Cluster the keywords to populate"
+            />
           )}
-          {showBattleground && (
-            <>
-              Biggest battleground is <strong className="font-semibold" style={{ color: "var(--accent-cyan)" }}>{battleground!.name}</strong>{" "}
-              with <strong className="font-semibold">{battleground!.aio_count}</strong> AIOs in play.
-            </>
-          )}
-        </p>
-      )}
+        </div>
+      </div>
+
+      {/* v1.1.31: padded section that wraps everything below the briefing card.
+          The outer box has no padding, so the toggle / pulse cards / volume
+          strip each need this wrapper to keep their horizontal alignment. */}
+      <div style={{ padding: "0 22px 22px" }}>
 
       {/* v1.1.28: relocated branded vs non-branded scope toggle. Sits directly
           above the pulse cards so the user reads "what's the scope?" → adjusts
@@ -295,6 +361,8 @@ export default function StoryPanel({
           <span className="muted"> Volume known on {fmtPct(latest.volume.coverage)} of the universe.</span>
         </div>
       )}
+
+      </div>{/* /v1.1.31 padded section */}
 
     </div>
   );
@@ -428,6 +496,83 @@ function Pulse({
 
 function fmtPct(x: number) { if (!Number.isFinite(x)) return "—"; return `${(x * 100).toFixed(1)}%`; }
 function fmtSigned(x: number) { const s = x > 0 ? "+" : ""; return `${s}${x}`; }
+
+/**
+ * v1.1.31: single block inside the 4-insight executive briefing grid.
+ *
+ * Layout: eyebrow label · large value (white) · short context line (muted) ·
+ * optional trend chip (red ↓ / green ↑). One accent color (cyan) is used
+ * only for the dot indicator inside the trend chip — body text stays
+ * white/muted to keep the briefing readable as a single visual unit.
+ */
+function InsightBlock({
+  label,
+  value,
+  context,
+  valueSize = "lg",
+  trend,
+}: {
+  label: string;
+  value: string;
+  context: string;
+  valueSize?: "lg" | "md";
+  trend?: { direction: "up" | "down"; label: string };
+}) {
+  const valueFont = valueSize === "lg" ? 28 : 17;
+  const valueLineHeight = valueSize === "lg" ? 1.1 : 1.3;
+  return (
+    <div
+      style={{
+        padding: "14px 16px",
+        borderRadius: 12,
+        background: "rgba(255,255,255,0.025)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        minHeight: 110,
+      }}
+    >
+      <div style={{ fontSize: 10.5, fontWeight: 500, letterSpacing: "0.10em", textTransform: "uppercase", color: "#8a93a6" }}>
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: valueFont,
+          fontWeight: 500,
+          color: "#f4f6fb",
+          letterSpacing: valueSize === "lg" ? "-0.02em" : "-0.01em",
+          lineHeight: valueLineHeight,
+          // Keep cluster names from overflowing the box on small screens.
+          overflowWrap: "anywhere",
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 2 }}>
+        <div style={{ fontSize: 12, color: "#8a93a6", lineHeight: 1.45 }}>
+          {context}
+        </div>
+        {trend && (
+          <span
+            style={{
+              fontSize: 10.5,
+              fontWeight: 500,
+              padding: "2px 7px",
+              borderRadius: 999,
+              background: trend.direction === "up" ? "rgba(182,245,59,0.12)" : "rgba(255,100,100,0.12)",
+              color: trend.direction === "up" ? "#b6f53b" : "#ff6464",
+              border: `1px solid ${trend.direction === "up" ? "rgba(182,245,59,0.35)" : "rgba(255,100,100,0.35)"}`,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {trend.direction === "up" ? "↑" : "↓"} {trend.label}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 function ordinal(n: number) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;

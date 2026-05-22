@@ -33,6 +33,46 @@ export default function ProjectCard({ project }: { project: ProjectListItem }) {
   const [typed, setTyped] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // v1.1.30: inline rename. Modal mirrors the delete-confirm pattern so the
+  // two interactions feel symmetrical. PATCHes brand_name on the existing
+  // /api/projects/[id] endpoint — the same call also triggers the v1.1.27
+  // reclassifyKeywords side effect, so branded/non-branded labels stay in sync.
+  const [renaming, setRenaming] = useState(false);
+  const [renameInput, setRenameInput] = useState(project.brand_name);
+  const [savingRename, setSavingRename] = useState(false);
+  const [renameError, setRenameError] = useState<string | null>(null);
+
+  function openRename(e: React.MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    setRenameInput(project.brand_name);
+    setRenameError(null);
+    setRenaming(true);
+  }
+  function closeRename() {
+    setRenaming(false);
+    setRenameError(null);
+  }
+  async function doRename() {
+    const next = renameInput.trim();
+    if (!next || next === project.brand_name) { closeRename(); return; }
+    setSavingRename(true);
+    setRenameError(null);
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ brand_name: next }),
+      });
+      const j = await res.json().catch(() => ({} as any));
+      if (!res.ok) throw new Error(j.error || `Server returned ${res.status}`);
+      closeRename();
+      router.refresh();
+    } catch (e) {
+      setRenameError((e as Error).message || "Rename failed");
+      setSavingRename(false);
+    }
+  }
 
   // Close confirm on Escape.
   useEffect(() => {
@@ -110,6 +150,39 @@ export default function ProjectCard({ project }: { project: ProjectListItem }) {
         </div>
       </Link>
 
+      {/* v1.1.30: rename button. Same hover affordance as the trash, sits to the
+          left of it so the destructive action stays in the far-right corner. */}
+      <button
+        onClick={openRename}
+        aria-label={`Rename project ${project.brand_name}`}
+        title={`Rename ${project.brand_name}`}
+        style={{
+          position: "absolute",
+          top: 12,
+          right: 50,
+          width: 30,
+          height: 30,
+          borderRadius: 8,
+          background: "rgba(255,255,255,0.04)",
+          color: "#8a93a6",
+          border: "1px solid rgba(255,255,255,0.10)",
+          cursor: "pointer",
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 0,
+          opacity: 0.7,
+          transition: "background 120ms ease, opacity 120ms ease, color 120ms ease",
+        }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(37,224,206,0.14)"; (e.currentTarget as HTMLButtonElement).style.color = "#25e0ce"; (e.currentTarget as HTMLButtonElement).style.opacity = "1"; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.04)"; (e.currentTarget as HTMLButtonElement).style.color = "#8a93a6"; (e.currentTarget as HTMLButtonElement).style.opacity = "0.7"; }}
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </svg>
+      </button>
+
       <button
         onClick={openConfirm}
         aria-label={`Delete project ${project.brand_name}`}
@@ -145,6 +218,113 @@ export default function ProjectCard({ project }: { project: ProjectListItem }) {
           <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
         </svg>
       </button>
+
+      {renaming && (
+        <div
+          onClick={closeRename}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.65)",
+            zIndex: 100,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Rename project"
+            style={{
+              width: "100%",
+              maxWidth: 460,
+              background: "#0c0f15",
+              border: "1px solid rgba(37,224,206,0.30)",
+              borderRadius: 14,
+              padding: 22,
+              boxShadow: "0 20px 60px rgba(0,0,0,0.60)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+              <div style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(37,224,206,0.14)", color: "#25e0ce", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+                <i className="ti ti-edit" style={{ fontSize: 18 }} aria-hidden="true"></i>
+              </div>
+              <div style={{ fontSize: 17, fontWeight: 600, color: "#f4f6fb", letterSpacing: "-0.01em" }}>
+                Rename project
+              </div>
+            </div>
+            <p style={{ fontSize: 13, color: "#8a93a6", margin: "0 0 6px" }}>
+              This is the name shown on the project list and across the dashboard.
+              It's also used to detect brand mentions in AIO answer text, so renaming
+              triggers a re-classification of all keywords as branded vs non-branded.
+            </p>
+            <input
+              autoFocus
+              type="text"
+              value={renameInput}
+              disabled={savingRename}
+              onChange={(e) => setRenameInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !savingRename) doRename(); }}
+              placeholder="New project name"
+              style={{
+                width: "100%",
+                marginTop: 10,
+                padding: "9px 12px",
+                background: "#11151d",
+                border: "1px solid rgba(37,224,206,0.30)",
+                borderRadius: 8,
+                color: "#f4f6fb",
+                fontSize: 14,
+                outline: "none",
+                fontFamily: "inherit",
+              }}
+            />
+            {renameError && (
+              <div style={{ marginTop: 10, padding: "8px 11px", borderRadius: 8, background: "rgba(255,100,100,0.10)", border: "1px solid rgba(255,100,100,0.30)", fontSize: 12, color: "#ff6464" }}>
+                {renameError}
+              </div>
+            )}
+            <div style={{ display: "flex", gap: 8, marginTop: 16, justifyContent: "flex-end" }}>
+              <button
+                onClick={closeRename}
+                disabled={savingRename}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  background: "transparent",
+                  color: "#d6dbe6",
+                  border: "1px solid rgba(255,255,255,0.14)",
+                  fontSize: 13,
+                  fontWeight: 500,
+                  cursor: savingRename ? "not-allowed" : "pointer",
+                  opacity: savingRename ? 0.55 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={doRename}
+                disabled={savingRename || !renameInput.trim() || renameInput.trim() === project.brand_name}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  background: (!renameInput.trim() || renameInput.trim() === project.brand_name) ? "rgba(37,224,206,0.20)" : "#25e0ce",
+                  color: (!renameInput.trim() || renameInput.trim() === project.brand_name) ? "#25e0ce" : "#06070b",
+                  border: "1px solid " + ((!renameInput.trim() || renameInput.trim() === project.brand_name) ? "rgba(37,224,206,0.30)" : "#25e0ce"),
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: (savingRename || !renameInput.trim() || renameInput.trim() === project.brand_name) ? "not-allowed" : "pointer",
+                }}
+              >
+                {savingRename ? "Saving…" : "Save name"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {confirming && (
         <div

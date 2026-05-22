@@ -4,6 +4,53 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.31] — 2026-05-22
+
+Restructure the Story panel as a contained executive briefing card.
+
+### Changed
+- **Story panel is now a framed briefing card.** Replaces the prose-paragraph layout with a clearly bordered container that has a header strip ("Executive summary · SERP impact · US · Snapshot date") at the top and a structured 4-insight grid in the body.
+- **Four insight blocks** in a responsive grid, mapping 1:1 to the four things a CMO wants in 5 seconds:
+  1. **AIO coverage** — how "infected" is the SERP (e.g. 44.4% — 202 of 455 queries)
+  2. **Your position** — your citation rate, rank vs leader, gap, and trend chip
+  3. **Strongest cluster** — your best-performing topic with citation rate and lead status
+  4. **Weakest cluster** — your worst-performing topic with the competitor who owns it (or "Biggest battleground" as a fallback when there's only one meaningful cluster)
+- **Disciplined color palette.** Body text is white and muted gray throughout. Only the trend chip uses color (lime ↑ for positive, red ↓ for negative). Eliminated the previous rainbow of cyan, amber, pink, lime, and red emphasis colors scattered across the prose.
+- **Removed standalone Wikipedia/Reddit sentence and editorial flourishes.** The non-brand citation share is now exposed in the Other Domains panel further down, not in the executive summary.
+
+### Why
+The prose layout was reading as chaotic — too many colors, too many sentences, important numbers buried inside paragraph text. The framed grid lets a CMO scan the four critical facts in two seconds without parsing prose.
+
+## [1.1.30] — 2026-05-22
+
+Rename projects + CMO-tone rewrite of the Story panel.
+
+### Added
+- **Rename project from the project list.** New pencil icon sits next to the trash on each project card. Opens a modal with the current name pre-filled, Enter or Save name commits via `PATCH /api/projects/[id]` with the new `brand_name`. Triggers the v1.1.27 `reclassifyKeywords` side effect automatically so branded/non-branded labels stay in sync.
+
+### Fixed
+- **"Closest threat below you" was showing the leader.** The `trailing` lookup in StoryPanel was `ranked[clientRank - 2]`, which for a 2nd-place client returns `ranked[0]` — i.e. the brand AHEAD, not behind. The new copy doesn't need this concept and uses the leader directly when the client isn't first, and only mentions the runner-up when the client IS the leader.
+- **Raw decimal in citation-count delta.** "Citation count is -0.0625" was the growth rate leaking into the prose as if it were a count. Now formatted as a percentage with an arrow ("↓ 6% vs prior snapshot") and only shown when the change is ≥1% (otherwise it's noise).
+
+### Changed
+- **CMO-tone Story rewrite.** Reduced 4 verbose paragraphs to 3 crisp lines that answer exactly three questions: (1) how big is the AIO battleground? (2) where do I rank and which way am I moving? (3) what's the topic I should attack or defend? Removed the "zero-click authority that's eating attention nobody is monetizing" editorial flourish — the Wikipedia/Reddit slot share is now one short clause inside the rank line.
+- **Suppressed noisy edge cases.** The "organic footprint" sentence is gone (it added confusion when projects had no organic-source keywords). The branded-vs-non-branded line is hidden when either side has fewer than 10 keywords (the comparison is statistical noise at that scale — was showing "1 of 2 branded queries" before).
+- **Headlines tightened.** "AIOs dominate this SERP" / "AIOs are reshaping this SERP" / "AIOs are emerging in this SERP" — present tense, one fewer word each.
+
+## [1.1.29] — 2026-05-22
+
+Preserve scroll position when toggling scope or any other refetch.
+
+### Fixed
+- **Dashboard scroll snap on toggle.** `Dashboard.tsx` was collapsing the entire page to a single-line `<div>Loading…</div>` placeholder every time `load()` ran — including when the user toggled the scope filter from down inside the page. The page would shrink to one line, the user would jump to the top, then the data would land and the page would re-expand. Now the full-page loader only renders on the very first load (`!data`). Subsequent refetches keep the existing dashboard rendered.
+- **Same fix in QuickWinsPanel and KeywordExplorer.** Both panels had the same anti-pattern (`if (loading) return ...`). Switched to `if (loading && !data) return ...` so the panels keep their previous list rendered while a refetch is in flight.
+
+### Added
+- **Inline "Updating…" pill** that appears at the top of the dashboard while a refetch is in flight (replaces the disappearing full-page loader). Small cyan rounded pill with a pulsing dot — non-disruptive, doesn't reflow the layout, but acknowledges that the request is happening.
+
+### Why
+The scope toggle felt jarring because every click sent the user back to the top of the page. Now toggling scope rescopes the data in place, the metrics cards re-populate, and the scroll position stays exactly where the user left it.
+
 ## [1.1.28] — 2026-05-22
 
 Relocate + refocus the branded/non-branded scope toggle.

@@ -198,7 +198,10 @@ export default function KeywordExplorer({
     }
   }
 
-  if (loading) return <div className="text-sm muted">Loading keyword detail…</div>;
+  // v1.1.29: collapse to the loader only when we have NO data yet. Subsequent
+  // refetches keep the table rendered so the scope toggle doesn't snap the
+  // user's scroll position back up.
+  if (loading && !data) return <div className="text-sm muted">Loading keyword detail…</div>;
   if (!data || data.keywords.length === 0) {
     return <div className="text-sm muted">No keyword data yet. Run a refresh first.</div>;
   }
