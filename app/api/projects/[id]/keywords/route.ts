@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import Papa from "papaparse";
 import {
   addKeywords,
-  countKeywords,
+  deleteAllKeywords,
   deleteKeyword,
   getProject,
   listCompetitors,
@@ -21,11 +21,18 @@ import { discoverOrganicKeywordsSeed, rankFor } from "@/lib/serpapi";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const MAX = Number(process.env.MAX_KEYWORDS_PER_REFRESH ?? 500);
+// v1.1.34: keyword universe is uncapped. The prior MAX_KEYWORDS_PER_REFRESH=500
+// cost guardrail was removed at user request — the clustering route now batches
+// large universes automatically, and SerpAPI cost is the user's call to manage.
+// Per-call discovery still has a soft ceiling (see seed/organic/market branches
+// below) to avoid one POST blowing through every SerpAPI credit at once.
+const PER_CALL_DISCOVERY_CEILING = Number(process.env.MAX_KEYWORDS_PER_CALL ?? 2000);
 
 export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   const keywords = await listKeywords(ctx.params.id);
-  return NextResponse.json({ keywords, max: MAX });
+  // `max: null` signals "unbounded" to the UI. Keeping the field in the response
+  // shape so older clients don't crash on a missing property.
+  return NextResponse.json({ keywords, max: null });
 }
 
 export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
@@ -51,14 +58,11 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   }
 
   const method = body.method ?? "manual";
-  const existing = await countKeywords(ctx.params.id);
-  const remainingCap = Math.max(0, MAX - existing);
-  if (remainingCap <= 0) {
-    return NextResponse.json(
-      { error: `Keyword cap reached (${MAX}). Delete some before adding more.` },
-      { status: 400 },
-    );
-  }
+  // v1.1.34: no universe cap. `remainingCap` is now a per-call ceiling for
+  // discovery methods only — it prevents a single "organic" or "market" POST
+  // from spending thousands of SerpAPI credits. Manual paste / CSV upload are
+  // entirely unbounded.
+  const remainingCap = PER_CALL_DISCOVERY_CEILING;
 
   let toAdd: { keyword: string; source: "organic" | "market" | "manual" | "seed" }[] = [];
 
@@ -127,15 +131,32 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     return NextResponse.json({ error: `unknown method ${method}` }, { status: 400 });
   }
 
-  toAdd = toAdd.slice(0, remainingCap);
+  // v1.1.34: only discovery methods (organic / seed / market) are bounded by
+  // PER_CALL_DISCOVERY_CEILING — they're the ones that burn SerpAPI credits.
+  // Manual paste and CSV upload are unbounded; the user has already typed/
+  // chosen exactly what they want to add.
+  if (method === "organic" || method === "seed" || method === "market") {
+    toAdd = toAdd.slice(0, remainingCap);
+  }
   const added = await addKeywords(ctx.params.id, toAdd);
-  return NextResponse.json({ added, attempted: toAdd.length, capRemaining: remainingCap - added });
+  return NextResponse.json({ added, attempted: toAdd.length });
 }
 
-export async function DELETE(req: NextRequest, _ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
   const { searchParams } = new URL(req.url);
+  // v1.1.35: bulk wipe path — `?all=true` deletes every keyword on the project.
+  // Snapshots are preserved (see deleteAllKeywords doc for rationale). The
+  // single-keyword path (`?keyword_id=…`) is unchanged so existing callers
+  // (per-row Remove buttons) keep working.
+  if (searchParams.get("all") === "true") {
+    const project = await getProject(ctx.params.id);
+    if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+    const deleted = await deleteAllKeywords(ctx.params.id);
+    return NextResponse.json({ ok: true, deleted });
+  }
+
   const kid = searchParams.get("keyword_id");
-  if (!kid) return NextResponse.json({ error: "keyword_id required" }, { status: 400 });
+  if (!kid) return NextResponse.json({ error: "keyword_id or ?all=true required" }, { status: 400 });
   await deleteKeyword(kid);
   return NextResponse.json({ ok: true });
 }

@@ -20,7 +20,7 @@ Track Google **AI Overview** coverage of a brand vs its competitors.
 ## v1 scope
 
 - Geo: **US**, Language: **English**, Device: **Desktop**.
-- Universe ceiling: **500 keywords per refresh** (cost control — ~$25 / refresh at SerpAPI rates).
+- Universe ceiling: **none** — as of v1.1.34 the keyword universe is uncapped. Large universes (>400 kw) are automatically batched for clustering. Per-call discovery (organic / market / seed) defaults to a 2,000-keyword soft ceiling to prevent a single click from spending excessive SerpAPI credits; configurable via `MAX_KEYWORDS_PER_CALL`.
 - Refresh: **on-demand only**. Each click writes an immutable snapshot row.
 
 ## Local setup
@@ -43,7 +43,7 @@ Open <http://localhost:3000>.
 | `ANTHROPIC_API_KEY` | yes | https://console.anthropic.com/settings/keys — powers smart segment detection |
 | `POSTGRES_URL` | yes | Vercel Postgres connection string |
 | `POSTGRES_URL_NON_POOLING` | optional | Set automatically by Vercel |
-| `MAX_KEYWORDS_PER_REFRESH` | optional | Default 500 |
+| `MAX_KEYWORDS_PER_CALL` | optional | Default 2000. Soft per-call ceiling for discovery (organic / market / seed) only — manual paste and CSV upload are uncapped. |
 | `DEFAULT_GL` / `DEFAULT_HL` / `DEFAULT_DEVICE` | optional | Defaults `us`/`en`/`desktop` |
 
 ## Deploy to Vercel
@@ -63,8 +63,9 @@ Open <http://localhost:3000>.
 
 ## Cost notes
 
-- One refresh ≈ `keywords × $0.0~ per query` on SerpAPI's plans. Default cap (500 kws) is ~$25 per refresh. The `organic` and `market` keyword discovery flows also burn SerpAPI calls — each rank check is one query.
+- One refresh ≈ `keywords × $0.0~ per query` on SerpAPI's plans. There is no universe cap — a 2,000-keyword universe runs ~$100 per refresh at typical SerpAPI rates. Size your universe with eyes open. The `organic` and `market` keyword discovery flows also burn SerpAPI calls — each rank check is one query.
 - Discovery is one-time per universe; refresh is the recurring cost. Don't run `organic` / `market` discovery on every page load.
+- Clustering: universes >400 keywords are automatically batched into multiple Anthropic calls. Each batch is ~$0.01 at Haiku rates, so a 2,000-keyword universe is ~$0.05 to cluster.
 
 ## Folder layout
 

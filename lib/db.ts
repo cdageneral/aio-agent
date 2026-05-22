@@ -225,21 +225,37 @@ export async function addKeywords(
       )
     : items.map(() => "non_branded" as const);
 
-  // Bulk insert with ON CONFLICT DO NOTHING. 3 params per row now: keyword,
-  // source, keyword_kind.
-  const values = items
-    .map((_, i) => `($1, $${i * 3 + 2}, $${i * 3 + 3}, $${i * 3 + 4})`)
-    .join(", ");
-  const params: any[] = [project_id];
-  for (let i = 0; i < items.length; i++) {
-    params.push(items[i].keyword.trim(), items[i].source, kinds[i]);
+  // v1.1.36: chunked INSERT. Previously this built one giant INSERT with all
+  // rows in a single VALUES clause, which broke for large uploads in two ways:
+  //   1. Postgres caps parameter counts at 65,535 per statement — at 4 params
+  //      per row (project_id + keyword + source + kind), that's ~16k rows max
+  //      in theory but PgBouncer / Vercel Postgres are noticeably less happy
+  //      with anything over a few thousand.
+  //   2. A single statement that touches 10k rows is slow enough on the
+  //      serverless function path to risk the 60s Hobby timeout.
+  // Batches of 500 keep each statement under 2,000 parameters and complete in
+  // a fraction of a second each. ON CONFLICT DO NOTHING per batch preserves
+  // dedup semantics — duplicates across batches are still ignored.
+  const BATCH = 500;
+  let totalInserted = 0;
+  for (let start = 0; start < items.length; start += BATCH) {
+    const chunk = items.slice(start, start + BATCH);
+    const chunkKinds = kinds.slice(start, start + BATCH);
+    const values = chunk
+      .map((_, i) => `($1, $${i * 3 + 2}, $${i * 3 + 3}, $${i * 3 + 4})`)
+      .join(", ");
+    const params: any[] = [project_id];
+    for (let i = 0; i < chunk.length; i++) {
+      params.push(chunk[i].keyword.trim(), chunk[i].source, chunkKinds[i]);
+    }
+    const { rowCount } = await sql.query(
+      `INSERT INTO keywords (project_id, keyword, source, keyword_kind) VALUES ${values}
+       ON CONFLICT (project_id, keyword) DO NOTHING;`,
+      params,
+    );
+    totalInserted += rowCount ?? 0;
   }
-  const { rowCount } = await sql.query(
-    `INSERT INTO keywords (project_id, keyword, source, keyword_kind) VALUES ${values}
-     ON CONFLICT (project_id, keyword) DO NOTHING;`,
-    params,
-  );
-  return rowCount ?? 0;
+  return totalInserted;
 }
 
 /**
@@ -281,6 +297,17 @@ export async function listKeywords(project_id: string): Promise<Keyword[]> {
 
 export async function deleteKeyword(id: string): Promise<void> {
   await sql`DELETE FROM keywords WHERE id = ${id};`;
+}
+
+/**
+ * v1.1.35: bulk-delete every keyword on a project. Returns the number of rows
+ * deleted so the route handler can echo it back to the UI ("Removed 438 …").
+ * Snapshots are left intact — historical comparisons of past keyword sets stay
+ * available even after the universe is wiped and re-seeded.
+ */
+export async function deleteAllKeywords(project_id: string): Promise<number> {
+  const { rowCount } = await sql`DELETE FROM keywords WHERE project_id = ${project_id};`;
+  return rowCount ?? 0;
 }
 
 export async function countKeywords(project_id: string): Promise<number> {

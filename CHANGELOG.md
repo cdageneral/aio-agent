@@ -4,6 +4,58 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.36] — 2026-05-22
+
+Make 10k-keyword uploads actually work end-to-end.
+
+### Changed
+- **`addKeywords` now batches INSERTs in chunks of 500 rows.** Previously the whole upload was a single INSERT with `4 × rowCount` parameters in one statement — fine for 500 rows, broken for 10,000. Two failure modes were waiting:
+  1. **Postgres parameter limit** — 65,535 max per statement, and Vercel Postgres / PgBouncer get unhappy well below that. A 10k upload generated ~40k parameters in one statement.
+  2. **Vercel function timeout** — a single 10k-row INSERT can take 30+ seconds on cold serverless. Combined with CSV parse + brand classification time, hitting the 60s Hobby limit was likely.
+- Batches of 500 keep each statement under 2,000 parameters and complete in well under a second each, regardless of universe size.
+- `ON CONFLICT DO NOTHING` is now applied per batch — dedup semantics across the whole upload are preserved (the table-level unique constraint catches duplicates between batches).
+
+### Why
+The v1.1.34 cap removal eliminated the *route-level* gate, but `addKeywords` itself was never tested at scale and would have failed silently on a 10k upload — either with a Postgres error returned as 500 (which the frontend then surfaces as the unhelpful "Unexpected token 'A'" JSON parse error from the earlier debug session) or with a Vercel function timeout. This release closes that loop so the uncapped universe is actually usable.
+
+## [1.1.35] — 2026-05-22
+
+Add "Delete all keywords" so a project can be re-seeded from scratch without recreating it.
+
+### Added
+- **`Delete all` button** in the `KeywordPanel` header, next to the keyword count. Hidden when the universe is empty. Disabled while a refresh or cluster is in flight so the rug doesn't get pulled out from under another operation.
+- **Confirm modal** — fixed overlay with a red destructive-action style. Shows the exact count being deleted ("Delete 438 keywords"), notes that snapshots are preserved, and requires an explicit confirm click. Backdrop click cancels (but not mid-delete).
+- **`lib/db.ts` → `deleteAllKeywords(project_id)`** new helper. Single `DELETE FROM keywords WHERE project_id = …` returning row count.
+- **`DELETE /api/projects/[id]/keywords?all=true`** bulk delete path. The existing `?keyword_id=…` single-row delete is unchanged — per-row Remove buttons still work.
+
+### Why
+Users wanted to refine a project's keyword set by starting over (e.g., replacing a draft CSV with a curated one) without losing the project's snapshot history, segment detection, competitors, or settings. Deleting the whole project to get a clean slate was overkill. Per-row delete on 438 keywords was painful.
+
+### Notes
+- **Snapshots are intentionally preserved.** The wipe only touches the `keywords` table — historical AIO-coverage data remains queryable for "what changed" comparisons across past keyword sets. If the new universe diverges entirely from the old, those comparisons get less meaningful, but the data is still there.
+- After wipe, the auto-cluster signature ref is reset so the next set of keywords triggers a fresh cluster pass (otherwise the "already clustered this signature" guard would block clustering of the new universe).
+
+## [1.1.34] — 2026-05-22
+
+Remove the 500-keyword universe ceiling. Add chunked clustering so any-size universes can be grouped into topics in one click.
+
+### Changed
+- **`MAX_KEYWORDS_PER_REFRESH=500` is gone.** The keyword universe is now uncapped. The legacy env var is removed from `.env.example`. The keyword `POST` route no longer rejects when the existing count exceeds a ceiling; manual paste and CSV upload accept any size payload.
+- **`KeywordPanel` no longer shows `X / 500`.** The header now reads "1,847 keywords" — a plain count with thousands separators — and the `max` state has been removed.
+- **`/api/projects/[id]/keywords` returns `max: null`** to signal "unbounded" while keeping the field present so older clients don't crash.
+- **Cluster route is now batched.** The hard `keywords.length > 500` rejection in `/api/projects/[id]/cluster-keywords` has been replaced with automatic chunking — the universe is sorted alphabetically, split into batches of 400, each batch is clustered by Haiku, and the resulting clusters are merged by case-insensitive name across batches. A 2,000-keyword universe now clusters in 5 Anthropic calls instead of being rejected outright.
+- **Response shape updated** to include `batches` and `batch_size` so the UI can show "Clustered 2,000 keywords across 5 batches" instead of leaving the user to wonder why a single call took 20 seconds.
+- **`maxDuration` on the cluster route bumped from 60s → 300s** because batched clustering for large universes can cumulatively run past a minute.
+
+### Added
+- **`MAX_KEYWORDS_PER_CALL`** new optional env var (default 2000). Caps a single *discovery* POST (`organic` / `market` / `seed`) to prevent one click from spending a ton of SerpAPI credits. Manual paste and CSV upload are unaffected.
+
+### Why
+The 500-keyword ceiling was originally a cost guardrail for SerpAPI burn. In practice it forced analysts to manually chop their universe into chunks and lose the unified view. The cost concern is better solved by per-call discovery limits (where the cost is incurred at add-time, not view-time) than by capping how many keywords a project can track. Clustering had its own technical reason for the 500 cap (Haiku response token budget) — chunked clustering with name-based merge solves that without making the analyst do the math.
+
+### Migration
+Existing deployments: any `MAX_KEYWORDS_PER_REFRESH` value in your Vercel env vars is now ignored. You can delete the var (it won't break anything either way). If you previously hit the cap and worked around it by chopping your universe, you can now consolidate everything into a single project. Re-cluster after consolidating — clustering will batch automatically.
+
 ## [1.1.33] — 2026-05-22
 
 Add a "Copy PPT Prompt" button that emits a fully-populated slide-generation prompt for the active deck.

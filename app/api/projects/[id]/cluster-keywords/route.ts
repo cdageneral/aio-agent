@@ -12,7 +12,15 @@ import { getProject, listKeywords } from "@/lib/db";
 import { clusterKeywords } from "@/lib/llm";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// v1.1.34: bumped from 60s — large universes (1000+ kw) split into multiple
+// Anthropic calls and the cumulative wall time can exceed a minute.
+export const maxDuration = 300;
+
+// v1.1.34: per-batch ceiling. The Anthropic clustering call is bounded by
+// max_tokens=8192 on the response. ~400 keywords fits comfortably; above that,
+// the model starts truncating output mid-cluster. We chunk anything larger and
+// merge clusters by name across batches.
+const CLUSTER_BATCH_SIZE = 400;
 
 export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
   // v1.1.21: wrap in try/catch and surface real error messages so the user
@@ -28,16 +36,57 @@ export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
     if (keywords.length < 5) {
       return NextResponse.json({ error: `clustering needs at least 5 keywords; you have ${keywords.length}` }, { status: 400 });
     }
-    if (keywords.length > 500) {
-      return NextResponse.json({ error: "too many keywords (cap is 500 per cluster run)" }, { status: 400 });
-    }
+    // v1.1.34: the prior `keywords.length > 500` hard cap was removed. Large
+    // universes are now batched (see chunked clustering below) so an analyst
+    // can cluster the whole set without manual chopping.
 
     const segment = [project.segment_l1, project.segment_l2, project.segment_l3].filter(Boolean).join(" › ");
-    const clusters = await clusterKeywords({
-      keywords: keywords.map((k) => k.keyword),
-      brand_name: project.brand_name,
-      segment: segment || undefined,
-    });
+    const allKw = keywords.map((k) => k.keyword);
+
+    // ── Chunk → cluster each batch → merge by name ────────────────────────
+    // Keywords are sorted alphabetically before chunking so the same input
+    // produces the same batches across runs. The LLM is asked to use stable
+    // cluster names, which is what makes the post-merge work: a batch that
+    // produces "Pricing & Billing" and a later batch that also produces
+    // "Pricing & Billing" get unioned into one cluster.
+    const sorted = [...allKw].sort((a, b) => a.localeCompare(b));
+    const batches: string[][] = [];
+    for (let i = 0; i < sorted.length; i += CLUSTER_BATCH_SIZE) {
+      batches.push(sorted.slice(i, i + CLUSTER_BATCH_SIZE));
+    }
+
+    type ClusterAccumulator = { name: string; description: string; keywords: string[] };
+    const merged = new Map<string, ClusterAccumulator>();
+    let batchesProcessed = 0;
+    for (const batch of batches) {
+      const part = await clusterKeywords({
+        keywords: batch,
+        brand_name: project.brand_name,
+        segment: segment || undefined,
+      });
+      for (const c of part) {
+        // Case-insensitive name match for the merge key so "Pricing & Billing"
+        // and "pricing & billing" coalesce.
+        const key = c.name.trim().toLowerCase();
+        const existing = merged.get(key);
+        if (existing) {
+          // Keep the first-seen description (it's just a label); union the
+          // keyword lists, de-duping case-insensitively.
+          const seen = new Set(existing.keywords.map((k) => k.toLowerCase()));
+          for (const k of c.keywords) {
+            if (!seen.has(k.toLowerCase())) {
+              existing.keywords.push(k);
+              seen.add(k.toLowerCase());
+            }
+          }
+        } else {
+          merged.set(key, { name: c.name.trim(), description: c.description, keywords: [...c.keywords] });
+        }
+      }
+      batchesProcessed += 1;
+    }
+    const clusters = Array.from(merged.values());
+
     if (clusters.length === 0) {
       return NextResponse.json({ error: "Claude returned no clusters — try again, or verify the keyword set is meaningful" }, { status: 500 });
     }
@@ -70,6 +119,10 @@ export async function POST(_req: NextRequest, ctx: { params: { id: string } }) {
       assigned,
       unclustered: keywords.length - assigned,
       clusters: summary,
+      // v1.1.34: surface how the universe was batched. Single batch for sets
+      // ≤ CLUSTER_BATCH_SIZE; multiple for larger universes that got merged.
+      batches: batchesProcessed,
+      batch_size: CLUSTER_BATCH_SIZE,
     });
   } catch (err: any) {
     console.error("[/api/projects/[id]/cluster-keywords POST] failed:", err);

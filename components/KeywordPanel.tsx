@@ -8,11 +8,18 @@ type Keyword = { id: string; keyword: string; source: string; cluster_label?: st
 
 export default function KeywordPanel({ projectId, onChanged, refreshing = false }: { projectId: string; onChanged: () => void; refreshing?: boolean }) {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
-  const [max, setMax] = useState(500);
+  // v1.1.34: keyword universe is uncapped — the prior `max` state is gone.
+  // The UI now shows a plain count instead of "X / 500".
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [clustering, setClustering] = useState(false);
   const [lastClusterSummary, setLastClusterSummary] = useState<ClusterSummary[] | null>(null);
+  // v1.1.35: confirm modal for the destructive "Delete all" action. Two-step
+  // confirmation — first click opens the modal, second click in the modal
+  // actually fires the wipe. The button is wired to refuse to enable while a
+  // refresh or cluster is in flight, so we never tear out the universe mid-op.
+  const [confirmingWipe, setConfirmingWipe] = useState(false);
+  const [wiping, setWiping] = useState(false);
 
   // v1.1.7: only manual entry remains. The organic/market/seed expansion paths
   // were removed — smart detection on the project header populates seed
@@ -38,7 +45,8 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
     const res = await fetch(`/api/projects/${projectId}/keywords`);
     const j = await res.json();
     setKeywords(j.keywords ?? []);
-    setMax(j.max ?? 500);
+    // v1.1.34: `j.max` is now `null` from the API (uncapped). The previous
+    // setMax(...) call has been removed along with the local `max` state.
   }
   useEffect(() => { load(); }, [projectId]);
 
@@ -173,6 +181,38 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
   }
 
   /**
+   * v1.1.35: wipe the entire keyword universe for this project. Snapshots are
+   * preserved at the DB level (only the keywords table is touched) so the
+   * user's historical AIO-coverage view doesn't disappear. The cluster
+   * tracking refs are reset here too so the next set of keywords gets
+   * auto-clustered from a clean slate rather than being skipped by the
+   * "already clustered this signature" guard.
+   */
+  async function wipeAll() {
+    if (wiping) return;
+    setWiping(true);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/keywords?all=true`, { method: "DELETE" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Failed to delete keywords");
+      // Reset auto-cluster bookkeeping so the next keyword add re-clusters
+      // from scratch (otherwise the empty-signature shortcut blocks it).
+      lastClusteredSigRef.current = "";
+      lastClusteredAtRef.current = 0;
+      setLastClusterSummary(null);
+      setMsg(`Removed ${j.deleted ?? 0} keyword${(j.deleted ?? 0) === 1 ? "" : "s"}. Universe is empty — add keywords to start over.`);
+      setConfirmingWipe(false);
+      await load();
+      onChanged();
+    } catch (e: any) {
+      setMsg(e.message);
+    } finally {
+      setWiping(false);
+    }
+  }
+
+  /**
    * v1.1.5: inline edit a keyword. We don't have a PATCH endpoint for
    * individual keywords, so the simple-but-correct path is delete + re-add
    * as a manual entry. Same project, same surface, no schema changes.
@@ -236,10 +276,111 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
 
   return (
     <div className="surface p-5">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-2 flex-wrap">
         <h2 className="h2">Keyword universe</h2>
-        <div className="text-xs muted">{usage} / {max} keywords</div>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 10 }}>
+          {/* v1.1.34: no universe cap. Show plain count. */}
+          <div className="text-xs muted">{usage.toLocaleString("en-US")} keyword{usage === 1 ? "" : "s"}</div>
+          {/* v1.1.35: Delete-all entry point. Hidden when the universe is
+              empty (nothing to delete), disabled mid-refresh / mid-cluster
+              so we never tear the rug out from under another operation. */}
+          {usage > 0 && (
+            <button
+              onClick={() => setConfirmingWipe(true)}
+              disabled={refreshing || clustering || wiping || busy}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 5,
+                padding: "4px 9px", borderRadius: 6,
+                background: "transparent",
+                color: refreshing || clustering || wiping || busy ? "rgba(255,100,100,0.40)" : "#ff6464",
+                fontSize: 11, fontWeight: 600,
+                border: "1px solid rgba(255,100,100,0.30)",
+                cursor: refreshing || clustering || wiping || busy ? "not-allowed" : "pointer",
+              }}
+              title={refreshing ? "Wait for refresh to finish first" : clustering ? "Wait for clustering to finish first" : "Delete every keyword in this project (snapshots are preserved)"}
+            >
+              <i className="ti ti-trash" style={{ fontSize: 12 }} aria-hidden="true"></i>
+              Delete all
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* v1.1.35: Confirm modal for the destructive wipe. Renders as a fixed
+          overlay so it sits on top of everything regardless of scroll. The
+          actual click handler on the Confirm button still calls wipeAll() —
+          we don't trust the modal alone to gate behavior. */}
+      {confirmingWipe && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed", inset: 0, zIndex: 100,
+            background: "rgba(0,0,0,0.70)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+            padding: 20,
+          }}
+          onClick={(e) => {
+            // Backdrop-click closes the modal (but not while wiping is in
+            // flight — would otherwise leave the user wondering if it worked).
+            if (e.target === e.currentTarget && !wiping) setConfirmingWipe(false);
+          }}
+        >
+          <div
+            style={{
+              background: "#0e1118",
+              border: "1px solid rgba(255,100,100,0.40)",
+              borderRadius: 12,
+              padding: 22,
+              maxWidth: 440, width: "100%",
+              boxShadow: "0 18px 60px rgba(0,0,0,0.50)",
+            }}
+          >
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+              <i className="ti ti-alert-triangle" style={{ fontSize: 18, color: "#ff6464" }} aria-hidden="true"></i>
+              <div style={{ fontSize: 15, fontWeight: 700, color: "#f4f6fb" }}>Delete all keywords?</div>
+            </div>
+            <p style={{ fontSize: 13, color: "#d6dbe6", lineHeight: 1.5, marginBottom: 14 }}>
+              This removes all <strong style={{ color: "#f4f6fb" }}>{usage.toLocaleString("en-US")}</strong> keyword{usage === 1 ? "" : "s"} from this project, including their cluster labels and any per-keyword volumes.
+            </p>
+            <p style={{ fontSize: 12, color: "#8a93a6", lineHeight: 1.5, marginBottom: 18 }}>
+              Past <strong style={{ color: "#d6dbe6" }}>snapshots are preserved</strong> — the AIO-coverage history stays available for what-changed comparisons. Only the keyword universe is wiped.
+            </p>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button
+                onClick={() => setConfirmingWipe(false)}
+                disabled={wiping}
+                style={{
+                  padding: "7px 13px", borderRadius: 8,
+                  background: "transparent",
+                  color: wiping ? "rgba(244,246,251,0.40)" : "#f4f6fb",
+                  fontSize: 13, fontWeight: 500,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  cursor: wiping ? "not-allowed" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={wipeAll}
+                disabled={wiping}
+                style={{
+                  display: "inline-flex", alignItems: "center", gap: 5,
+                  padding: "7px 13px", borderRadius: 8,
+                  background: wiping ? "rgba(255,100,100,0.30)" : "#ff6464",
+                  color: "#0a0c10",
+                  fontSize: 13, fontWeight: 700,
+                  border: "none",
+                  cursor: wiping ? "not-allowed" : "pointer",
+                }}
+              >
+                <i className={`ti ${wiping ? "ti-loader-2" : "ti-trash"}`} style={{ fontSize: 13, animation: wiping ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
+                {wiping ? "Deleting…" : `Delete ${usage.toLocaleString("en-US")} keyword${usage === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-xs mt-1 space-x-2">
         {Object.entries(sourcesCount).map(([k, v]) => <span key={k} className="tag">{k}: {v}</span>)}
       </div>
