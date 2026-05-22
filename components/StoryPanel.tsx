@@ -14,11 +14,19 @@ export default function StoryPanel({
   latest,
   growth,
   region,
+  kindFilter = "all",
+  onKindFilterChange,
 }: {
   project: any;
   latest: any | null;
   growth: any | null;
   region: RegionMode;
+  /** v1.1.28: branded/non-branded scope, controlled by Dashboard so it can
+   *  also flow into QuickWinsPanel + KeywordExplorer. The toggle UI lives
+   *  inside this panel (above the pulse cards) — it was buried in the
+   *  top-of-page area in v1.1.27 and people missed it. */
+  kindFilter?: "all" | "branded" | "non_branded";
+  onKindFilterChange?: (v: "all" | "branded" | "non_branded") => void;
 }) {
   if (!latest) {
     return (
@@ -166,6 +174,19 @@ export default function StoryPanel({
             </>
           )}
         </p>
+      )}
+
+      {/* v1.1.28: relocated branded vs non-branded scope toggle. Sits directly
+          above the pulse cards so the user reads "what's the scope?" → adjusts
+          → sees the cards re-populate. Visually heavier than the v1.1.27 strip
+          (header + explainer + larger touch targets) so it can't be missed. */}
+      {onKindFilterChange && (latest.total_keywords_branded + latest.total_keywords_non_branded) > 0 && (
+        <ScopeToggle
+          value={kindFilter}
+          onChange={onKindFilterChange}
+          branded={latest.total_keywords_branded}
+          nonBranded={latest.total_keywords_non_branded}
+        />
       )}
 
       {/* Pulse cards — share the same "X of Y" framing so the math is obvious.
@@ -411,4 +432,111 @@ function ordinal(n: number) {
   const s = ["th", "st", "nd", "rd"];
   const v = n % 100;
   return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+/**
+ * v1.1.28: prominent branded/non-branded scope selector.
+ *
+ * Visual hierarchy: section header → 1-line explainer → three pill buttons
+ * sized large enough to be the natural eye-catching element above the pulse
+ * cards. Active state uses the brand-accent color + a soft glow ring so the
+ * selection is obvious even at a glance.
+ *
+ * Counts always reflect the FULL keyword universe (not the filtered slice) —
+ * the metrics layer guarantees this.
+ */
+function ScopeToggle({
+  value,
+  onChange,
+  branded,
+  nonBranded,
+}: {
+  value: "all" | "branded" | "non_branded";
+  onChange: (v: "all" | "branded" | "non_branded") => void;
+  branded: number;
+  nonBranded: number;
+}) {
+  const total = branded + nonBranded;
+  const options: { id: "all" | "branded" | "non_branded"; label: string; sub: string; count: number; accent: string }[] = [
+    { id: "all",         label: "All keywords", sub: "Combined view",   count: total,       accent: "#8a93a6" },
+    { id: "non_branded", label: "Non-branded",  sub: "Generic queries", count: nonBranded,  accent: "#25e0ce" },
+    { id: "branded",     label: "Branded",      sub: "Brand queries",   count: branded,     accent: "#a878ff" },
+  ];
+
+  return (
+    <div
+      style={{
+        marginTop: 18,
+        padding: "16px 18px",
+        borderRadius: 12,
+        background: "linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01))",
+        border: "1px solid rgba(255,255,255,0.10)",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.10em", textTransform: "uppercase", color: "#ffb846" }}>
+            Scope · view by query type
+          </div>
+          <div style={{ fontSize: 13, color: "#8a93a6", marginTop: 3, lineHeight: 1.5 }}>
+            Branded queries inflate citation rates because you already rank #1 organically. Toggle to non-branded to see where AIO is actually competing for clicks.
+          </div>
+        </div>
+        {value !== "all" && (
+          <div style={{ fontSize: 11.5, color: "#ffb846", background: "rgba(255,184,70,0.10)", padding: "4px 10px", borderRadius: 999, border: "1px solid rgba(255,184,70,0.35)", whiteSpace: "nowrap" }}>
+            Filtered view active
+          </div>
+        )}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+        {options.map((o) => {
+          const active = value === o.id;
+          return (
+            <button
+              key={o.id}
+              onClick={() => onChange(o.id)}
+              type="button"
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "flex-start",
+                gap: 4,
+                padding: "12px 14px",
+                borderRadius: 10,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                textAlign: "left",
+                transition: "background 140ms ease, border-color 140ms ease, transform 80ms ease",
+                background: active ? `${o.accent}1f` : "rgba(20,24,32,0.55)",
+                color: active ? o.accent : "#d6dbe6",
+                border: active ? `1.5px solid ${o.accent}` : "1px solid rgba(255,255,255,0.10)",
+                boxShadow: active ? `0 0 0 3px ${o.accent}22, 0 4px 16px ${o.accent}1a` : "none",
+              }}
+              onMouseEnter={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.25)"; }}
+              onMouseLeave={(e) => { if (!active) (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(255,255,255,0.10)"; }}
+            >
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
+                <span style={{ fontSize: 14, fontWeight: 600, letterSpacing: "-0.005em" }}>{o.label}</span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: active ? `${o.accent}33` : "rgba(255,255,255,0.06)",
+                    color: active ? o.accent : "#8a93a6",
+                  }}
+                >
+                  {o.count.toLocaleString()}
+                </span>
+              </div>
+              <div style={{ fontSize: 11.5, color: active ? `${o.accent}cc` : "#5a6478", marginTop: 1 }}>
+                {o.sub}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }

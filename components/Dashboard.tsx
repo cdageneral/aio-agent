@@ -193,16 +193,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
       {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
 
-      {/* v1.1.27: branded vs non-branded scope toggle. Sits high in the layout
-          so users see it before they read any number — and so re-toggling it
-          immediately re-fetches metrics, drilldown, and opportunities. */}
-      <BrandedToggle
-        value={kindFilter}
-        onChange={setKindFilter}
-        branded={data.latest?.total_keywords_branded ?? 0}
-        nonBranded={data.latest?.total_keywords_non_branded ?? 0}
-      />
-
+      {/* v1.1.28: the scope toggle was moved out of this top area and embedded
+          inside StoryPanel, sitting directly above the pulse-card strip — it
+          was getting lost up here, and pairing it with the metrics makes the
+          cause/effect of toggling obvious. State stays in Dashboard so child
+          panels (QuickWinsPanel, KeywordExplorer) still get a single source. */}
 
       {/* Inputs grouped together — all "things to configure before running a refresh"
           sit at the top, all results (Story, charts, clusters, drilldown) sit below. */}
@@ -226,7 +221,14 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         onRefresh={onRefresh}
       />
 
-      <StoryPanel project={project} latest={latest} growth={growth} region={region} />
+      <StoryPanel
+        project={project}
+        latest={latest}
+        growth={growth}
+        region={region}
+        kindFilter={kindFilter}
+        onKindFilterChange={setKindFilter}
+      />
 
       {latest && latest.share_of_voice && latest.total_citation_slots > 0 && (() => {
         // When a cluster filter is active, scope the donut + legend to that
@@ -423,87 +425,6 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   );
 }
 
-/**
- * v1.1.27: branded vs non-branded scope toggle. Three buttons with counts so
- * the user can see the split at a glance, even when filtered.
- */
-function BrandedToggle({
-  value,
-  onChange,
-  branded,
-  nonBranded,
-}: {
-  value: "all" | "branded" | "non_branded";
-  onChange: (v: "all" | "branded" | "non_branded") => void;
-  branded: number;
-  nonBranded: number;
-}) {
-  const total = branded + nonBranded;
-  const options: { id: "all" | "branded" | "non_branded"; label: string; count: number; accent: string }[] = [
-    { id: "all", label: "All keywords", count: total, accent: "#8a93a6" },
-    { id: "non_branded", label: "Non-branded", count: nonBranded, accent: "#25e0ce" },
-    { id: "branded", label: "Branded", count: branded, accent: "#a878ff" },
-  ];
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "8px 12px",
-        borderRadius: 10,
-        background: "rgba(20,24,32,0.55)",
-        border: "1px solid rgba(255,255,255,0.06)",
-        flexWrap: "wrap",
-      }}
-    >
-      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#8a93a6", marginRight: 4 }}>
-        Scope
-      </span>
-      {options.map((o) => {
-        const active = value === o.id;
-        return (
-          <button
-            key={o.id}
-            onClick={() => onChange(o.id)}
-            type="button"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 8,
-              padding: "6px 12px",
-              borderRadius: 8,
-              fontSize: 12.5,
-              fontWeight: 600,
-              cursor: "pointer",
-              transition: "background 120ms ease, border-color 120ms ease",
-              background: active ? `${o.accent}22` : "transparent",
-              color: active ? o.accent : "#d6dbe6",
-              border: `1px solid ${active ? `${o.accent}66` : "rgba(255,255,255,0.10)"}`,
-            }}
-          >
-            <span>{o.label}</span>
-            <span
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                padding: "1px 7px",
-                borderRadius: 999,
-                background: active ? `${o.accent}33` : "rgba(255,255,255,0.06)",
-                color: active ? o.accent : "#8a93a6",
-              }}
-            >
-              {o.count.toLocaleString()}
-            </span>
-          </button>
-        );
-      })}
-      {value !== "all" && (
-        <span style={{ fontSize: 11.5, color: "#8a93a6", marginLeft: "auto" }}>
-          Dashboard scoped to <strong style={{ color: "#d6dbe6" }}>{value === "branded" ? "branded" : "non-branded"}</strong> keywords.
-          All metrics, opportunities, and drilldown below are filtered.
-        </span>
-      )}
-    </div>
-  );
-}
+// v1.1.28: BrandedToggle moved into StoryPanel.tsx so it lives directly above
+// the pulse-card strip. State still lives in Dashboard (passed down as a
+// controlled prop) so QuickWinsPanel + KeywordExplorer read the same value.

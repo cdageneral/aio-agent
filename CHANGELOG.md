@@ -4,6 +4,26 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.28] — 2026-05-22
+
+Relocate + refocus the branded/non-branded scope toggle.
+
+### Changed
+- **Moved the scope toggle out of the top-of-page area** (under the refresh banner in v1.1.27) and embedded it inside `StoryPanel`, directly above the pulse-card strip. Pairing the control with the metrics it affects makes the cause/effect of toggling obvious — toggling rescopes "Available AIOs" and "AIO Penetration in SERP" right beneath it.
+- **Redesigned with much more visual weight:**
+  - Wrapped in a soft surface card with subtle top-light gradient + 1px border so it reads as its own UI module, not chrome.
+  - "Scope · view by query type" amber section header.
+  - One-line plain-English explainer: "Branded queries inflate citation rates because you already rank #1 organically. Toggle to non-branded to see where AIO is actually competing for clicks."
+  - Three larger pill buttons in a 3-column grid with primary label, secondary "what it means" subtitle, and the count badge.
+  - Active state adds a 1.5px brand-accent border + 3px soft glow ring + filled background tint — impossible to mistake which option is selected.
+  - When in a filtered state, an amber "Filtered view active" pill appears on the right side of the section header.
+
+### Why
+v1.1.27's toggle sat under the refresh banner, well above any data — users scrolled past it. Putting it adjacent to the first metric cards makes it impossible to miss and self-documenting.
+
+### Notes
+- State still lives in `Dashboard.tsx` and flows down through props — `QuickWinsPanel` and `KeywordExplorer` continue to receive `kindFilter` exactly as before. No API or schema changes, no DB migration needed.
+
 ## [1.1.27] — 2026-05-22
 
 Branded vs non-branded keyword scope — see how AIO coverage looks for the queries that matter.
