@@ -45,33 +45,58 @@ export default function QuickWinsPanel({
   const [wins, setWins] = useState<QuickWin[] | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
-  // v1.1.49: snapshot diagnostics — populated alongside `wins` from the same
-  // /quick-wins response. Lets the empty state render specific copy
+  // v1.1.49/v1.1.50: snapshot diagnostics — populated alongside `wins` from
+  // the same /quick-wins response. Lets the empty state render specific copy
   // ("16 AIOs in Canada, all 16 already cited by CHIP") instead of the
-  // generic three-causes hand-wave.
+  // generic three-causes hand-wave. v1.1.50 dropped the
+  // total_serps_in_snapshot / serps_in_region_total fields because their
+  // SQL was flaky on Vercel Postgres and was bringing down the whole
+  // endpoint.
   const [diagnostics, setDiagnostics] = useState<{
     snapshot_ran_at: string;
     regions_in_view: string[] | null;
-    total_serps_in_snapshot: number;
-    serps_in_region_total: number;
     aios_in_region: number;
     aios_won_by_client: number;
     aios_open_gaps: number;
     client_brand: string;
   } | null>(null);
+  // v1.1.50: surface server errors instead of silently degrading to "no
+  // completed snapshot." v1.1.49 had a SQL syntax issue that made every
+  // quick-wins call 500; the client's old code did `j = await res.json()`
+  // with no `res.ok` check, so the 500's `{error: …}` shape parsed without
+  // throwing but without `opportunities` or `diagnostics`, and the empty
+  // state rendered the most-pessimistic branch. Tracking serverError lets
+  // us tell the user "the endpoint is broken, here's the message" instead.
+  const [serverError, setServerError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    // Pull a bigger window so client-side cluster filtering has enough rows
-    // to slice. Display still caps at the top N after filtering.
+    setServerError(null);
     const params = new URLSearchParams({ region: regionsForMode(region).join(","), limit: "60" });
     if (kindFilter !== "all") params.set("kind", kindFilter);
-    const res = await fetch(`/api/projects/${projectId}/quick-wins?${params.toString()}`, { cache: "no-store" });
-    const j = await res.json();
-    setWins(j.opportunities ?? []);
-    setTotal(j.total_opportunities ?? 0);
-    setDiagnostics(j.diagnostics ?? null);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/quick-wins?${params.toString()}`, { cache: "no-store" });
+      let j: any = null;
+      try {
+        j = await res.json();
+      } catch {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          `Server returned ${res.status} ${res.statusText} (unparseable response${body ? `: ${body.slice(0, 160)}` : ""})`,
+        );
+      }
+      if (!res.ok) throw new Error(j?.error ?? `Server returned ${res.status} ${res.statusText}`);
+      setWins(j.opportunities ?? []);
+      setTotal(j.total_opportunities ?? 0);
+      setDiagnostics(j.diagnostics ?? null);
+    } catch (e: any) {
+      setServerError(e?.message ?? String(e));
+      // Force the empty-state branch to render so the error surfaces.
+      setWins([]);
+      setDiagnostics(null);
+    } finally {
+      setLoading(false);
+    }
   }, [projectId, region, kindFilter]);
 
   useEffect(() => { load(); }, [load, refreshNonce]);
@@ -100,31 +125,45 @@ export default function QuickWinsPanel({
   // shrink and snap the user's scroll position upward.
   if (loading && !wins) return <div className="text-sm muted">Scoring opportunities…</div>;
   if (!wins || wins.length === 0) {
-    // v1.1.44/v1.1.49: data-driven empty state. Instead of guessing among
-    // "every AIO won / no AIOs / wrong region", we read the diagnostics the
-    // server sent back and tell the user exactly which one it is.
+    // v1.1.44/v1.1.49/v1.1.50: data-driven empty state. Picks copy based on
+    // what the server actually reported, with serverError taking top priority
+    // so a broken endpoint can't masquerade as "no data."
     const regionLabel = region === "us" ? "USA" : region === "ca" ? "Canada" : "USA + Canada";
+    if (serverError) {
+      return (
+        <div
+          role="alert"
+          style={{
+            margin: 18,
+            padding: "12px 14px",
+            borderRadius: 10,
+            background: "rgba(255,100,100,0.08)",
+            border: "1px solid rgba(255,100,100,0.40)",
+            color: "#ffb1b1",
+            fontSize: 13,
+            lineHeight: 1.5,
+          }}
+        >
+          <div style={{ fontWeight: 600, color: "#ff6464", marginBottom: 4 }}>
+            AIO Opportunities couldn&apos;t load
+          </div>
+          <div style={{ overflowWrap: "anywhere" }}>{serverError}</div>
+        </div>
+      );
+    }
     let diagnosis: React.ReactNode;
     if (!diagnostics) {
       diagnosis = (
         <>No completed snapshot for this project yet. Run a refresh first.</>
       );
-    } else if (diagnostics.serps_in_region_total === 0) {
-      // Snapshot exists but didn't crawl this region at all.
-      diagnosis = (
-        <>
-          The latest snapshot didn&apos;t include <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> — 0 queries crawled here
-          {diagnostics.total_serps_in_snapshot > 0 && (
-            <> (snapshot has {diagnostics.total_serps_in_snapshot.toLocaleString()} queries in other regions)</>
-          )}
-          . Switch the region toggle to one the snapshot covers, or click Run refresh to re-crawl with the current toggle.
-        </>
-      );
     } else if (diagnostics.aios_in_region === 0) {
-      // Region was crawled but no AIOs triggered.
+      // Either the region wasn't crawled or no AIOs triggered. Without an
+      // extra "serps in region" count we can't tell which — but the action
+      // is the same: refresh with this region, or check that the universe
+      // has AIO-prone keywords.
       diagnosis = (
         <>
-          Crawled {diagnostics.serps_in_region_total.toLocaleString()} queries in <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> — 0 of them triggered an AIO. Either AIOs aren&apos;t showing for these queries in this region right now, or the universe needs more AIO-prone keywords.
+          The latest snapshot has 0 AIOs in <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong>. Either the region wasn&apos;t crawled, or none of the tracked queries trigger an AIO here right now. Try switching the region toggle and clicking Run refresh.
         </>
       );
     } else if (diagnostics.aios_open_gaps === 0) {

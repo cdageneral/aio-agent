@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.50] — 2026-05-23
+
+Hot-fix on a hot-fix: v1.1.49's diagnostic SQL was breaking the quick-wins endpoint, and the client was eating the resulting 500 as "no completed snapshot."
+
+### Fixed
+- **Removed flaky `STRING_TO_ARRAY` / `UNNEST` SQL in the diagnostic block.** v1.1.49 added two extra COUNT(*) queries to compute `total_serps_in_snapshot` and `serps_in_region_total`. The region-filtered count used `LOWER(country) IN (SELECT UNNEST(STRING_TO_ARRAY($2, ',')))` to work around `@vercel/postgres`'s missing support for `= ANY($::text[])` with a JS-array binding. The trick worked in TypeScript but failed at runtime on Vercel Postgres, throwing inside the request handler. Without a try/catch wrapper, the failure propagated as an unhandled exception → 500 response. The remaining diagnostic fields (`aios_in_region`, `aios_won_by_client`, `aios_open_gaps`) are now computed entirely from the in-memory `filtered` array. No extra SQL. The "snapshot doesn't include this region" branch is replaced by "0 AIOs in this region" — same actionable signal, no flaky query.
+- **Wrapped the whole quick-wins handler in try/catch.** Any unexpected failure now returns `{ error: "..." }` with status 500 instead of crashing silently. Defense-in-depth so the next flaky SQL doesn't masquerade as missing data.
+- **Client now surfaces server errors visibly.** `QuickWinsPanel.load()` previously called `await res.json()` without checking `res.ok`, so a 500's `{ error: ... }` body parsed cleanly into a response with no `opportunities` and no `diagnostics`. The panel rendered the most-pessimistic empty-state branch ("No completed snapshot") even when a perfectly good snapshot existed. The fetch now checks `res.ok`, falls back to `res.text()` if JSON parse fails, and stores the error in a new `serverError` state. The empty state branches on `serverError` first — a red banner with the exact failure message — so a broken endpoint can never again look like missing data.
+
+### Why
+The reporter installed v1.1.49 and saw the AIO Opportunities panel say "No completed snapshot for this project yet" while the executive summary at the top of the same page was showing populated data. Both panels call `latestSnapshot()` and should agree. The contradiction was: metrics worked, quick-wins was 500-ing, and the client was silently degrading the 500 into the "no diagnostics" empty-state branch. This release stops that pattern in both directions — the server doesn't crash, and even if it did the client would tell you so.
+
+### Notes
+- If you see the red "AIO Opportunities couldn't load" banner after installing this, paste me the error text — that's a server problem we can fix.
+- If you see a normal empty-state diagnostic ("0 AIOs in Canada" or "all AIOs already cited by CHIP"), that's the genuine state of your data and we can act on it.
+
 ## [1.1.49] — 2026-05-23
 
 The AIO Opportunities empty state now tells you exactly why it's empty.
