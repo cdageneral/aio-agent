@@ -4,6 +4,23 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.37] — 2026-05-22
+
+Add a live refresh progress bar so the user can tell whether a long SerpAPI run is moving or hung.
+
+### Added
+- **`RefreshProgress` component** — sticky strip above the dashboard sections during a refresh. Shows a colored progress bar (lime for healthy, amber/red for stalled or failed), the count "Processed 1,234 / 6,436", real-time AIO hit count, error count, elapsed time, throughput (kw/s), and ETA. Status pill flips between "live", "complete", "failed", and "stalled".
+- **`GET /api/projects/[id]/refresh/progress`** new endpoint. Returns the latest snapshot's status + count of `serp_results` rows written so far + computed `pct`, `elapsed_sec`, `stalled` heuristic.
+- **Stall detection** — if a snapshot has been in `running` status for >60s with zero rows written, or its overall rate is below 0.05 keywords/sec after 5 minutes, the UI flags it as stalled. Most common cause: Vercel function exceeded its execution time limit and was killed mid-run.
+- **`lib/db.ts` → `latestSnapshotAnyStatus()` + `snapshotProgress()`** new helpers backing the progress endpoint.
+- **Dashboard polling** — when `refreshing` is true, polls `/refresh/progress` every 2.5s. Only surfaces progress for snapshots that started at-or-after the user's last Run-refresh click, so stale `running` snapshots from previous sessions don't appear when the page is reloaded.
+
+### Why
+For a large keyword universe (1,000+), a refresh takes many minutes — and on Vercel the function will almost certainly hit its execution time limit before finishing. Without a progress display, the user can't tell whether the refresh is making progress, has stalled, or completed silently. The progress bar surfaces all three states honestly.
+
+### Known limitation (not fixed in this release)
+A single Vercel serverless function CANNOT complete a refresh of 1,000+ keywords on Hobby (60s) or even Pro (300s). The progress bar will accurately show that the function died partway through. The proper fix is a background-job pattern (cron-triggered chunked refresh, or an external worker) — this is on the roadmap but requires a more involved architectural change. For now, the progress bar at least makes the failure mode visible instead of leaving the user staring at a spinning button forever.
+
 ## [1.1.36] — 2026-05-22
 
 Make 10k-keyword uploads actually work end-to-end.

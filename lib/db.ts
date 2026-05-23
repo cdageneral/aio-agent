@@ -341,6 +341,44 @@ export async function latestSnapshot(project_id: string): Promise<Snapshot | nul
   return rows[0] ?? null;
 }
 
+/**
+ * v1.1.37: most recent snapshot REGARDLESS of status. Used by the
+ * /refresh/progress endpoint to surface the in-flight snapshot's progress —
+ * `latestSnapshot` is filtered to complete-only and would miss a running one.
+ */
+export async function latestSnapshotAnyStatus(project_id: string): Promise<Snapshot | null> {
+  const { rows } = await sql<Snapshot>`
+    SELECT * FROM snapshots WHERE project_id = ${project_id} ORDER BY ran_at DESC LIMIT 1;`;
+  return rows[0] ?? null;
+}
+
+/**
+ * v1.1.37: count serp_results rows for a snapshot. Used as a live progress
+ * counter — the refresh route inserts one row per (keyword × region) as it
+ * processes, so polling this gives "done so far / expected total".
+ *
+ * Also returns:
+ *  - aios_so_far: rows with has_aio = true (real-time AIO hit count)
+ *  - failed_so_far: rows whose raw payload contains an "error" key (the
+ *    refresh route writes a stub serp_result with raw={error:...} on per-
+ *    keyword failures so they're still counted toward done).
+ */
+export async function snapshotProgress(snapshot_id: string): Promise<{
+  done: number;
+  aios_so_far: number;
+  failed_so_far: number;
+}> {
+  const { rows } = await sql<{ done: number; aios_so_far: number; failed_so_far: number }>`
+    SELECT
+      COUNT(*)::int AS done,
+      COUNT(*) FILTER (WHERE has_aio = true)::int AS aios_so_far,
+      COUNT(*) FILTER (WHERE raw ? 'error')::int AS failed_so_far
+    FROM serp_results
+    WHERE snapshot_id = ${snapshot_id};
+  `;
+  return rows[0] ?? { done: 0, aios_so_far: 0, failed_so_far: 0 };
+}
+
 // -------- SERP results + citations + mentions --------
 export async function saveSerpResult(input: {
   snapshot_id: string;

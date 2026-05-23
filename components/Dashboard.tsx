@@ -19,6 +19,7 @@ import QuickWinsPanel from "./QuickWinsPanel";
 import WhatChangedPanel from "./WhatChangedPanel";
 import OtherDomainsTabs from "./OtherDomainsTabs";
 import InfoTooltip from "./InfoTooltip";
+import RefreshProgress, { type RefreshProgressData } from "./RefreshProgress";
 
 export interface MetricsPayload {
   project: any;
@@ -67,6 +68,16 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   // load. The previous `data === null` check was a stale closure that could
   // mis-fire after onChanged() refetches and cause double-loads to race.
   const didInferRegionRef = useRef(false);
+
+  // v1.1.37: live refresh-progress polling state. Populated by a setInterval
+  // that hits /refresh/progress every 2.5s while a refresh is in flight.
+  // Cleared when the polled snapshot reaches a terminal state OR when the
+  // user starts a brand-new refresh (so we don't show stale numbers).
+  const [refreshProgress, setRefreshProgress] = useState<RefreshProgressData | null>(null);
+  // Used to identify a "fresh" refresh — we only show progress for snapshots
+  // ran_at ≥ the time we clicked Refresh, so historical stalled snapshots
+  // from previous runs don't bleed into the current view.
+  const refreshStartedAtRef = useRef<number>(0);
 
   function pickCluster(name: string) {
     // Toggle off if user re-clicks the active card.
@@ -152,6 +163,10 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     if (refreshing) return;
     setRefreshing(true);
     setRefreshMsg(null);
+    // v1.1.37: stamp the start time so the polling effect knows to only
+    // surface progress for snapshots that started at-or-after this click.
+    refreshStartedAtRef.current = Date.now();
+    setRefreshProgress(null);
     try {
       const res = await fetch(`/api/projects/${projectId}/refresh`, { method: "POST" });
       const j = await res.json();
@@ -167,6 +182,39 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       setRefreshing(false);
     }
   }
+
+  // v1.1.37: poll /refresh/progress while a refresh is in flight (or a
+  // recently-started snapshot is still in 'running' state). 2.5s cadence
+  // is enough to feel live without burning DB queries. Stops itself when
+  // the polled snapshot reaches a terminal status OR the user starts a
+  // brand-new refresh.
+  useEffect(() => {
+    if (!refreshing) {
+      // Even when we stop refreshing, leave the LAST progress object on screen
+      // briefly so the user sees the final state — Dashboard cleans it up
+      // when the next refresh kicks off (refreshStartedAtRef bumps).
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/refresh/progress`, { cache: "no-store" });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (cancelled || !j.snapshot) return;
+        const snapStartedMs = new Date(j.snapshot.ran_at).getTime();
+        // Only surface progress for snapshots that started at-or-after our
+        // click — otherwise a stale 'running' snapshot from a prior session
+        // would appear immediately when the user reloads the page.
+        if (snapStartedMs + 5000 < refreshStartedAtRef.current) return;
+        setRefreshProgress(j.snapshot);
+      } catch { /* swallow — transient network errors during polling are fine */ }
+    };
+    // Fire once immediately, then on interval.
+    poll();
+    const handle = setInterval(poll, 2500);
+    return () => { cancelled = true; clearInterval(handle); };
+  }, [refreshing, projectId]);
 
   // v1.1.29: only collapse to the full-page loader on the very FIRST load (when
   // data is still null). Subsequent refetches — scope toggle, region change,
@@ -201,6 +249,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         }}
         onSeedKeywordsApplied={applySeedKeywords}
       />
+
+      {/* v1.1.37: live refresh progress. Shown whenever we have a polled
+          snapshot object — covers both the actively-running case and the
+          recently-completed/failed case so the final counts stay visible. */}
+      {refreshProgress && <RefreshProgress data={refreshProgress} />}
 
       {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
 
