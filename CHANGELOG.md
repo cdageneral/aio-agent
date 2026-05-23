@@ -4,6 +4,21 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.52] — 2026-05-23
+
+Emergency revert of v1.1.51.
+
+### Reverted
+- **All `export const dynamic = "force-dynamic"` lines added in v1.1.51** are removed. v1.1.51's hypothesis was that Vercel's data cache was freezing null responses from quick-wins / drilldown. After deploying, `metrics` also started returning `latest: null` — even though `listSnapshots()` in the same handler returned the same complete snapshots that `latestSnapshot()` was now refusing to find. The whole dashboard went empty. Root cause of how `force-dynamic` interacts with this app's setup is still unknown — but reverting restores production.
+
+### State after this release
+- We're back to v1.1.50's behavior. The executive summary, charts, clusters, and brand comparison should populate again on the next deploy. AIO Opportunities and Keyword Drilldown will return to the pre-v1.1.51 broken state (showing the original null/cache symptom). The caching issue is still open; needs a different approach.
+
+### Next investigation paths (for future me)
+- Try `revalidate = 0` instead of `dynamic = "force-dynamic"` — different Next.js opt-out mechanism with potentially different side effects.
+- Try client-side cache busting: add a unique timestamp query param on each fetch.
+- Check Vercel deployment logs for v1.1.51 for any build warnings related to the dynamic flag.
+
 ## [1.1.51] — 2026-05-23
 
 The root cause of every "panels are empty even though the snapshot has data" symptom: Vercel's data cache was freezing the first response from each route handler and serving it forever.

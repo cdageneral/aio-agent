@@ -23,9 +23,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { finalizeSnapshot, latestSnapshotAnyStatus, snapshotProgress } from "@/lib/db";
 
 export const runtime = "nodejs";
-// v1.1.51: opt out of Vercel's static-response cache — a polled progress
-// endpoint must never serve a stale "running" snapshot from the CDN.
-export const dynamic = "force-dynamic";
+// v1.1.52: removed v1.1.51's force-dynamic — see quick-wins for context.
 // Light read-only endpoint — default 10s is plenty.
 
 // v1.1.45: hard age cap on 'running' snapshots. Vercel function max is 60s

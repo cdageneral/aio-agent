@@ -19,10 +19,11 @@ import { computeSnapshotMetrics, growthRate, BrandSpec, CitationRow, SerpResultR
 import type { KeywordKind } from "@/lib/keywordKind";
 
 export const runtime = "nodejs";
-// v1.1.51: opt out of Vercel's static-response cache. The metrics endpoint
-// happened to escape the cache problem that hit quick-wins and drilldown,
-// but making this explicit prevents future regressions.
-export const dynamic = "force-dynamic";
+// v1.1.52: removed v1.1.51's force-dynamic. It caused latestSnapshot() to
+// return null even when listSnapshots() returned the same complete snapshot
+// rows. Root cause is still unclear — possibly an interaction between
+// force-dynamic and the sql template caching, possibly a Next.js bundling
+// issue. Reverting for now to restore production.
 
 /** v1.1.27: parse ?kind= into one of three modes. Defaults to "all". */
 function parseKind(raw: string | null): "all" | KeywordKind {

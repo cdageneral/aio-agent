@@ -19,12 +19,10 @@ import { getProject, latestSnapshot, listCompetitors } from "@/lib/db";
 import { domainMatches } from "@/lib/domain";
 
 export const runtime = "nodejs";
-// v1.1.51: opt out of Vercel's static-response cache. Without this, the first
-// hit (often when no snapshot existed yet) was being frozen by the CDN and
-// served as the canonical response for every subsequent request — so even
-// after a successful refresh, the endpoint kept returning {snapshot: null}
-// while metrics (which somehow escaped the same cache) returned real data.
-export const dynamic = "force-dynamic";
+// v1.1.52: removed v1.1.51's `export const dynamic = "force-dynamic"`. It
+// broke the metrics endpoint in production (latest snapshot returned null
+// even though listSnapshots showed the snapshots exist). The cache-bypass
+// problem v1.1.51 was trying to fix needs a different solution.
 
 interface QuickWin {
   keyword: string;
