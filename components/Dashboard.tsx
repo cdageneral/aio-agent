@@ -197,8 +197,24 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         }
       }
       const res = await fetch(`/api/projects/${projectId}/refresh`, { method: "POST" });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "Refresh failed");
+      // v1.1.48: parse the response defensively. A common server-side failure
+      // mode (function crash, Vercel timeout returning HTML, missing API key
+      // returning a 500 page, etc.) is for the response to NOT be valid JSON.
+      // Without this guard, `await res.json()` would throw a "Unexpected
+      // token < in JSON" error that gets swallowed into a useless "Refresh
+      // failed" string instead of surfacing the actual HTTP failure.
+      let j: any = null;
+      try {
+        j = await res.json();
+      } catch {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          res.ok
+            ? "Refresh returned unparseable response"
+            : `Server returned ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+        );
+      }
+      if (!res.ok) throw new Error(j?.error ?? `Refresh failed (${res.status})`);
       setRefreshMsg(`Snapshot saved — ${j.aios_triggered} AIO(s) detected${j.failed ? `, ${j.failed} errored` : ""}.`);
       await load();
       // v1.1.15: nudge child panels (Quick Wins, Drilldown) so they refetch
@@ -372,7 +388,75 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         />
       )}
 
-      {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
+      {/* v1.1.48: prominent refresh status banner. Was previously rendered
+          as `text-sm muted` (small, gray), which made error messages easy to
+          miss — users would click Refresh, get a near-instant failure, and
+          see no visible feedback because the failure copy blended into the
+          rest of the layout. Now we distinguish success vs error via banner
+          styling and an icon. Detection: the string starts with "Error:"
+          when onRefresh's catch block ran, otherwise it's a success. */}
+      {refreshMsg && (() => {
+        const isError = refreshMsg.startsWith("Error:");
+        return (
+          <div
+            role={isError ? "alert" : "status"}
+            style={{
+              display: "flex",
+              alignItems: "flex-start",
+              gap: 10,
+              padding: "12px 14px",
+              borderRadius: 10,
+              background: isError ? "rgba(255,100,100,0.08)" : "rgba(182,245,59,0.07)",
+              border: `1px solid ${isError ? "rgba(255,100,100,0.40)" : "rgba(182,245,59,0.30)"}`,
+              color: isError ? "#ffb1b1" : "#d6dbe6",
+              fontSize: 13,
+              lineHeight: 1.5,
+            }}
+          >
+            <i
+              className={`ti ${isError ? "ti-alert-triangle" : "ti-circle-check"}`}
+              style={{
+                fontSize: 18,
+                color: isError ? "#ff6464" : "#b6f53b",
+                flexShrink: 0,
+                marginTop: 1,
+              }}
+              aria-hidden="true"
+            />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, color: isError ? "#ff6464" : "#b6f53b", marginBottom: 2 }}>
+                {isError ? "Refresh failed" : "Refresh complete"}
+              </div>
+              <div style={{ overflowWrap: "anywhere" }}>
+                {isError ? refreshMsg.replace(/^Error:\s*/, "") : refreshMsg}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setRefreshMsg(null)}
+              aria-label="Dismiss"
+              title="Dismiss"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 24,
+                height: 24,
+                padding: 0,
+                borderRadius: 5,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.10)",
+                color: "#8a93a6",
+                cursor: "pointer",
+                lineHeight: 1,
+                flexShrink: 0,
+              }}
+            >
+              <i className="ti ti-x" style={{ fontSize: 13 }} aria-hidden="true" />
+            </button>
+          </div>
+        );
+      })()}
 
       {/* v1.1.29: silent-refresh indicator. Appears when a refetch is in flight
           on top of already-rendered data (e.g. user toggled scope). Sits high

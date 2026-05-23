@@ -4,6 +4,20 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.48] — 2026-05-23
+
+Diagnostic release: refresh failures are now impossible to miss.
+
+### Changed
+- **`refreshMsg` renders as a prominent banner.** Previously it was tiny gray `text-sm muted` text after the progress bar. A near-instant refresh failure (e.g., function crash, missing SerpAPI key, Vercel returning HTML instead of JSON) would land here as something like "Error: Unexpected token < in JSON at position 0" and the user would see no visible feedback at all because the message blended into the rest of the layout. Now success and error states each get their own banner — green/lime with a checkmark for "Refresh complete", red with a warning icon for "Refresh failed" — with the actual error text rendered in body copy and a dismiss ✕ for clearing.
+- **`onRefresh()` parses the refresh response defensively.** A server-side crash that returns HTML or an empty body would previously have caused `await res.json()` itself to throw, which got swallowed into a generic "Refresh failed" message that hid the real cause. We now try-catch the JSON parse; if it fails, we fall back to `res.text()` and surface the first 200 chars of the body along with the HTTP status. So if Vercel returns a 500 with an HTML error page, the user sees `Server returned 500 — <html><head>…` instead of a meaningless `Refresh failed`.
+
+### Why
+The reporter clicked Refresh after installing v1.1.47 and saw "no progress bar or the words saved anywhere." The Refresh API was failing in ~1–2 seconds (vs the expected 30–60s for a real run), but the failure message rendered too quietly to be noticed. This release doesn't fix any underlying refresh-route bug — it just surfaces the bug so we can read what it actually is.
+
+### Notes
+- After installing this, click Refresh once. If it fails fast again, the red banner will tell you exactly what the server returned — share that with me and we can fix the root cause. If it succeeds (full 100% progress bar, "Snapshot saved" banner), we're past the diagnostic phase and your detail panels will populate.
+
 ## [1.1.47] — 2026-05-23
 
 The region toggle on the dashboard now actually controls what gets crawled when you click Refresh.
