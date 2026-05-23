@@ -12,10 +12,15 @@ import {
   addKeywords,
   deleteAllKeywords,
   deleteKeyword,
+  deleteKeywordsBySource,
   getProject,
   listCompetitors,
   listKeywords,
 } from "@/lib/db";
+
+// v1.1.38: whitelist of valid source values for the per-source delete path.
+// Keep in sync with the Keyword.source union in lib/db.ts.
+const VALID_SOURCES = new Set(["manual", "organic", "market", "seed"]);
 import { discoverOrganicKeywordsSeed, rankFor } from "@/lib/serpapi";
 
 export const runtime = "nodejs";
@@ -155,8 +160,26 @@ export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) 
     return NextResponse.json({ ok: true, deleted });
   }
 
+  // v1.1.38: scoped wipe — `?source=manual|organic|market|seed` deletes every
+  // keyword on the project that came from a specific ingestion source. Backs
+  // the per-source trash icons in KeywordPanel. Validated against the same
+  // enum the schema uses so a bad value never reaches the DB.
+  const source = searchParams.get("source");
+  if (source) {
+    if (!VALID_SOURCES.has(source)) {
+      return NextResponse.json({ error: `invalid source: ${source}` }, { status: 400 });
+    }
+    const project = await getProject(ctx.params.id);
+    if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+    const deleted = await deleteKeywordsBySource(
+      ctx.params.id,
+      source as "manual" | "organic" | "market" | "seed",
+    );
+    return NextResponse.json({ ok: true, deleted, source });
+  }
+
   const kid = searchParams.get("keyword_id");
-  if (!kid) return NextResponse.json({ error: "keyword_id or ?all=true required" }, { status: 400 });
+  if (!kid) return NextResponse.json({ error: "keyword_id, ?source=…, or ?all=true required" }, { status: 400 });
   await deleteKeyword(kid);
   return NextResponse.json({ ok: true });
 }

@@ -183,38 +183,95 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     }
   }
 
-  // v1.1.37: poll /refresh/progress while a refresh is in flight (or a
-  // recently-started snapshot is still in 'running' state). 2.5s cadence
-  // is enough to feel live without burning DB queries. Stops itself when
-  // the polled snapshot reaches a terminal status OR the user starts a
-  // brand-new refresh.
+  // v1.1.37/v1.1.40: poll /refresh/progress so the bar surfaces a live
+  // refresh regardless of whether the user just clicked the button or just
+  // reloaded the page mid-refresh.
+  //
+  // v1.1.40 fixes two bugs from the original v1.1.37 wiring:
+  //   1. The effect used to bail when `refreshing === false`, so reloading
+  //      the page while a refresh was running on the server showed no bar
+  //      at all — exactly the moment the user expects to come back and
+  //      check on it. We now ALWAYS poll on mount.
+  //   2. The freshness filter compared the snapshot's `ran_at` (server
+  //      clock) against `refreshStartedAtRef.current` (client clock). Any
+  //      clock skew — common across Vercel regions — could incorrectly
+  //      exclude a just-created snapshot. We now use the server-computed
+  //      `elapsed_sec` to decide whether a snapshot is fresh enough to
+  //      display, eliminating the client/server clock dependency.
+  //
+  // Recency rule: show the snapshot if status === "running" (server thinks
+  // work is happening — stall detection inside the endpoint will catch
+  // zombies) OR if it finished within the last 10 minutes (so the user can
+  // see the final state briefly after completion). Older terminal snapshots
+  // are stale UI noise and are hidden.
+  //
+  // Polling lifecycle: poll once on mount. If a fresh snapshot is found and
+  // it's still running, keep polling at 2.5s cadence. Once the snapshot is
+  // terminal we stop the interval but leave the final state visible. When
+  // the user clicks Refresh, this effect re-runs (refreshing is in the dep
+  // array) and resumes polling.
   useEffect(() => {
-    if (!refreshing) {
-      // Even when we stop refreshing, leave the LAST progress object on screen
-      // briefly so the user sees the final state — Dashboard cleans it up
-      // when the next refresh kicks off (refreshStartedAtRef bumps).
-      return;
-    }
     let cancelled = false;
-    const poll = async () => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+
+    const stopInterval = () => {
+      if (interval) { clearInterval(interval); interval = null; }
+    };
+    const startInterval = () => {
+      if (cancelled || interval) return;
+      interval = setInterval(tick, 2500);
+    };
+
+    const tick = async () => {
       try {
         const res = await fetch(`/api/projects/${projectId}/refresh/progress`, { cache: "no-store" });
-        if (!res.ok) return;
+        if (!res.ok || cancelled) return;
         const j = await res.json();
-        if (cancelled || !j.snapshot) return;
-        const snapStartedMs = new Date(j.snapshot.ran_at).getTime();
-        // Only surface progress for snapshots that started at-or-after our
-        // click — otherwise a stale 'running' snapshot from a prior session
-        // would appear immediately when the user reloads the page.
-        if (snapStartedMs + 5000 < refreshStartedAtRef.current) return;
-        setRefreshProgress(j.snapshot);
+        if (cancelled) return;
+
+        const snap = j.snapshot;
+        if (!snap) {
+          // No snapshot exists yet. If user is actively refreshing, keep
+          // polling — the server is about to create one. Otherwise nothing
+          // to show.
+          if (!refreshing) {
+            setRefreshProgress(null);
+            stopInterval();
+          }
+          return;
+        }
+
+        const isFresh =
+          snap.status === "running" || (snap.elapsed_sec ?? 0) < 600;
+        if (!isFresh) {
+          setRefreshProgress(null);
+          stopInterval();
+          return;
+        }
+
+        setRefreshProgress(snap);
+
+        if (snap.status === "running") {
+          startInterval();
+        } else {
+          // Terminal status — keep the result on screen but stop polling.
+          stopInterval();
+        }
       } catch { /* swallow — transient network errors during polling are fine */ }
     };
-    // Fire once immediately, then on interval.
-    poll();
-    const handle = setInterval(poll, 2500);
-    return () => { cancelled = true; clearInterval(handle); };
-  }, [refreshing, projectId]);
+
+    // Initial check on mount, project change, or when user starts a refresh.
+    tick();
+    // If user just kicked off a refresh, start the interval even before the
+    // first tick returns — the snapshot may not exist yet on the server, and
+    // we want to be polling as soon as it does.
+    if (refreshing) startInterval();
+
+    return () => {
+      cancelled = true;
+      stopInterval();
+    };
+  }, [projectId, refreshing]);
 
   // v1.1.29: only collapse to the full-page loader on the very FIRST load (when
   // data is still null). Subsequent refetches — scope toggle, region change,
@@ -394,8 +451,15 @@ export default function Dashboard({ projectId }: { projectId: string }) {
             <GrowthChart series={series} range={range} />
           </div>
           <div className="surface-2 p-4">
-            <div className="text-sm font-semibold">Acquisition rate</div>
-            <p className="text-xs muted mb-2">Citation rate over time — {project.brand_name} vs tracked competitors.</p>
+            {/* v1.1.42: renamed from "Acquisition rate" — the prior name was
+                vague and didn't make clear this is the time-series view of
+                the same "Your position" number in the executive summary.
+                Caption now also calls out that each plotted point corresponds
+                to one refresh snapshot, not a fixed daily/weekly cadence. */}
+            <div className="text-sm font-semibold">Your position over time</div>
+            <p className="text-xs muted mb-2">
+              Citation rate per refresh snapshot — {project.brand_name} (blue) vs tracked competitors. Each point = one refresh.
+            </p>
             <AcquisitionChart series={series} range={range} project={project} />
           </div>
         </div>

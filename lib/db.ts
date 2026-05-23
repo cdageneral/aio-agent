@@ -310,6 +310,26 @@ export async function deleteAllKeywords(project_id: string): Promise<number> {
   return rowCount ?? 0;
 }
 
+/**
+ * v1.1.38: scoped delete — wipe every keyword on the project that came in
+ * through a specific ingestion source (manual / organic / market / seed). This
+ * is the back end for the per-source trash icons in KeywordPanel; users wanted
+ * a way to remove just one "set" (e.g. an accidental 5,000-row CSV paste)
+ * without nuking keywords from other sources. Returns the rows-affected count
+ * so the UI can echo it. Snapshots are preserved — same rationale as
+ * deleteAllKeywords.
+ */
+export async function deleteKeywordsBySource(
+  project_id: string,
+  source: Keyword["source"],
+): Promise<number> {
+  const { rowCount } = await sql`
+    DELETE FROM keywords
+    WHERE project_id = ${project_id} AND source = ${source};
+  `;
+  return rowCount ?? 0;
+}
+
 export async function countKeywords(project_id: string): Promise<number> {
   const { rows } = await sql<{ c: number }>`SELECT COUNT(*)::int AS c FROM keywords WHERE project_id = ${project_id};`;
   return rows[0]?.c ?? 0;

@@ -57,13 +57,23 @@ export default function StoryPanel({
   const nonBrandShare = totalCites > 0 ? ((stb.wikipedia ?? 0) + (stb.reddit ?? 0)) / totalCites : 0;
   const regionLabel = region === "us" ? "US" : region === "ca" ? "Canada" : "US + Canada";
 
-  // v1.1.30: surface delta in CITATIONS (whole number), not as a growth fraction.
-  // The metrics layer was passing growth.brands[i].aios_acquired as a rate
-  // (e.g. -0.0625), which then rendered as raw decimal in the prose. We compute
-  // the absolute delta off snapshot-to-snapshot counts available in the brands
-  // payload — when growth isn't available yet, we suppress the trend line entirely.
-  const clientDeltaPct = clientGrowth?.aios_acquired ?? null;          // rate-of-change, e.g. -0.0625
-  const hasTrendSignal = clientDeltaPct !== null && Math.abs(clientDeltaPct) >= 0.01; // 1% threshold
+  // v1.1.42: trend pill now uses citation_rate_delta (absolute pt change in
+  // citation rate vs the prior snapshot) instead of aios_acquired (growth
+  // rate of raw acquired count). Same direction, much clearer label — "+1.7
+  // pts vs prior snapshot" is unambiguous; "8% vs prior" forced the user to
+  // mentally translate a rate-of-change of a count.
+  //
+  // v1.1.30 history: the metrics layer used to pass growth.brands[i].aios_acquired
+  // as a raw decimal (e.g. -0.0625), which rendered as a decimal in the
+  // prose. v1.1.42 replaces this with the absolute pt delta the metrics
+  // route already computes (citation_rate_delta) and falls back to the
+  // legacy growth-rate field on older payloads.
+  const clientDeltaPts: number | null =
+    typeof clientGrowth?.citation_rate_delta === "number"
+      ? clientGrowth.citation_rate_delta // absolute, e.g. 0.017 = 1.7 pts
+      : null;
+  // 0.5 pt threshold — below this is noise.
+  const hasTrendSignal = clientDeltaPts !== null && Math.abs(clientDeltaPts) >= 0.005;
 
   const headline =
     triggerPct >= 0.5
@@ -162,14 +172,12 @@ export default function StoryPanel({
             marginTop: 18,
           }}
         >
-          {/* 1 · AIO coverage / "infection" rate */}
-          <InsightBlock
-            label="AIO coverage"
-            value={fmtPct(triggerPct)}
-            context={`${latest.total_aios_triggered.toLocaleString()} of ${latest.total_keywords.toLocaleString()} tracked queries`}
-          />
+          {/* v1.1.41: AIO coverage card removed at user request. The headline
+              ("AIOs dominate / are reshaping / are emerging") is still driven
+              by `triggerPct`, so the same signal is conveyed at-a-glance
+              without duplicating the number in a tile. */}
 
-          {/* 2 · Position vs top competitor */}
+          {/* Position vs top competitor */}
           <InsightBlock
             label="Your position"
             value={fmtPct(clientCiteRate)}
@@ -181,8 +189,11 @@ export default function StoryPanel({
             trend={
               hasTrendSignal
                 ? {
-                    direction: (clientDeltaPct ?? 0) >= 0 ? "up" : "down",
-                    label: `${Math.abs(Math.round((clientDeltaPct ?? 0) * 100))}% vs prior`,
+                    direction: (clientDeltaPts ?? 0) >= 0 ? "up" : "down",
+                    // v1.1.42: absolute pt change vs prior snapshot. Rounded
+                    // to 1 decimal — "+1.7 pts" reads cleaner than "+1.685 pts"
+                    // and stops the pill from getting wider on noisy data.
+                    label: `${Math.abs((clientDeltaPts ?? 0) * 100).toFixed(1)} pts vs prior snapshot`,
                   }
                 : undefined
             }

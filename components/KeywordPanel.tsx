@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { primaryBtnStyle } from "./uiStyles";
 
 type ClusterSummary = { name: string; description: string; count: number };
@@ -14,11 +14,17 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
   const [msg, setMsg] = useState<string | null>(null);
   const [clustering, setClustering] = useState(false);
   const [lastClusterSummary, setLastClusterSummary] = useState<ClusterSummary[] | null>(null);
-  // v1.1.35: confirm modal for the destructive "Delete all" action. Two-step
-  // confirmation — first click opens the modal, second click in the modal
-  // actually fires the wipe. The button is wired to refuse to enable while a
-  // refresh or cluster is in flight, so we never tear out the universe mid-op.
-  const [confirmingWipe, setConfirmingWipe] = useState(false);
+  // v1.1.35/v1.1.38: confirm modal for destructive delete actions. Two-step
+  // confirmation — first click opens the modal, second click actually fires.
+  // v1.1.38 generalizes the modal so the same component handles both the
+  // global "Delete all" wipe and the per-source ("Delete all manual",
+  // "Delete all organic", …) wipes triggered by the trash icons on each
+  // source tag. `confirm.kind` decides which copy + endpoint we use.
+  const [confirm, setConfirm] = useState<
+    | { kind: "all" }
+    | { kind: "source"; source: string; count: number }
+    | null
+  >(null);
   const [wiping, setWiping] = useState(false);
 
   // v1.1.7: only manual entry remains. The organic/market/seed expansion paths
@@ -31,15 +37,12 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
 
-  // v1.1.6: auto-clustering bookkeeping. We compare a signature of the current
-  // keyword SET (sorted, lowercased) against the signature we last clustered.
-  const lastClusteredSigRef = useRef<string>("");
-  // v1.1.26: hard time-based cooldown. Even if the signature differs from the
-  // last clustered version, refuse to auto-trigger another cluster within 30
-  // seconds of the previous one. Belt-and-suspenders against any cause-chain
-  // that produces repeat clusters (e.g., signature flicker during a state
-  // transition, retry logic, etc.).
-  const lastClusteredAtRef = useRef<number>(0);
+  // v1.1.38: clustering is no longer auto-triggered by keyword-set changes.
+  // It now fires exactly once after each successful manual add / CSV upload
+  // (see submit() and uploadCsv()), and otherwise only on the manual
+  // "Cluster now" button. The signature/cooldown bookkeeping from prior
+  // versions has been removed — it was guarding against the loop bug in the
+  // useEffect-driven auto-cluster path, which no longer exists.
 
   async function load() {
     const res = await fetch(`/api/projects/${projectId}/keywords`);
@@ -50,67 +53,35 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
   }
   useEffect(() => { load(); }, [projectId]);
 
-  // v1.1.6: auto-cluster on a debounce when the keyword set changes.
-  // Triggers on initial mount (if keywords aren't already clustered) and
-  // any time keywords are added, edited, or deleted. Skips re-runs when the
-  // current set matches what we last clustered (avoids the loop bug from
-  // v1.1.5 where onChanged() refetches caused repeated clustering even
-  // though the keyword set hadn't changed).
-  useEffect(() => {
-    if (keywords.length < 5) return;
-
-    // v1.1.10: never auto-cluster while a refresh is in flight. The cluster
-    // API + its onChanged() refetch was racing the refresh's own load() and
-    // landing stale data on screen. Pausing during refresh means the user has
-    // to click Refresh only once instead of two or three times.
+  /**
+   * v1.1.38: one-shot cluster trigger used by submit() and uploadCsv() after
+   * a successful add. Quiet failure mode — if the cluster call errors we don't
+   * surface it through `msg` (the add itself already succeeded), but we do
+   * clear the spinner. Skipped when the projected universe size is under 5
+   * (the clustering endpoint requires a minimum) or while a refresh is in
+   * flight (refresh path does its own data load — the two would race).
+   *
+   * `addedCount` comes from the POST response, NOT from local state, because
+   * `keywords` state hasn't been re-rendered yet at the point this fires.
+   * Using the response avoids a fragile second GET.
+   */
+  async function autoClusterAfterAdd(addedCount: number) {
     if (refreshing) return;
-
-    // Build a stable signature: sorted lowercase keyword strings joined.
-    // Same strings → same cluster result, regardless of array reference or order.
-    const sig = keywords.map((k) => k.keyword.toLowerCase().trim()).sort().join("|");
-
-    // Already clustered this exact set in-session → nothing to do.
-    if (sig === lastClusteredSigRef.current) return;
-
-    // First time we're seeing this set this session. If the database already
-    // has cluster_label on every keyword, the previous clustering still applies
-    // and we should NOT re-run. Just memo the sig and exit.
-    const firstRun = lastClusteredSigRef.current === "";
-    if (firstRun && keywords.every((k) => !!k.cluster_label)) {
-      lastClusteredSigRef.current = sig;
-      return;
-    }
-
-    // v1.1.26: hard time-based cooldown. Refuse to schedule a new cluster
-    // within 30 seconds of the last one regardless of signature changes.
-    const elapsedSinceLastCluster = Date.now() - lastClusteredAtRef.current;
-    if (lastClusteredAtRef.current > 0 && elapsedSinceLastCluster < 30_000) {
-      return;
-    }
-
-    // v1.1.11: 3s debounce (was 8s). Short enough that single-keyword adds
-    // feel immediate; long enough to coalesce a quick paste of 5-15 keywords
-    // into one cluster call instead of N.
-    const timer = setTimeout(async () => {
-      if (refreshing) return;
-      // One more cooldown check at fire time in case anything raced.
-      if (Date.now() - lastClusteredAtRef.current < 30_000 && lastClusteredAtRef.current > 0) return;
-      setClustering(true);
-      try {
-        const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
-        if (res.ok) {
-          const j = await res.json();
-          lastClusteredSigRef.current = sig;
-          lastClusteredAtRef.current = Date.now();
-          setLastClusterSummary(j.clusters ?? null);
-          onChanged();
-        }
-      } catch { /* swallow — auto-cluster shouldn't surface errors */ }
-      finally { setClustering(false); }
-    }, 3000);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [keywords, projectId, refreshing]);
+    const projected = keywords.length + addedCount;
+    if (projected < 5) return;
+    setClustering(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/cluster-keywords`, { method: "POST" });
+      if (res.ok) {
+        const j = await res.json();
+        setLastClusterSummary(j.clusters ?? null);
+        // Refresh local keyword list so cluster_label values land in the UI.
+        await load();
+        onChanged();
+      }
+    } catch { /* swallow — the add already succeeded, don't shout */ }
+    finally { setClustering(false); }
+  }
 
   async function submit() {
     setBusy(true);
@@ -128,6 +99,8 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
       setManualText("");
       await load();
       onChanged();
+      // v1.1.38: one-shot auto-cluster after the add lands.
+      if ((j.added ?? 0) > 0) await autoClusterAfterAdd(j.added ?? 0);
     } catch (e: any) {
       setMsg(e.message);
     } finally {
@@ -148,6 +121,8 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
       setMsg(`Added ${j.added} keyword(s) from CSV.`);
       await load();
       onChanged();
+      // v1.1.38: one-shot auto-cluster after the upload lands.
+      if ((j.added ?? 0) > 0) await autoClusterAfterAdd(j.added ?? 0);
     } catch (e: any) {
       setMsg(e.message);
     } finally {
@@ -181,34 +156,56 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
   }
 
   /**
-   * v1.1.35: wipe the entire keyword universe for this project. Snapshots are
-   * preserved at the DB level (only the keywords table is touched) so the
-   * user's historical AIO-coverage view doesn't disappear. The cluster
-   * tracking refs are reset here too so the next set of keywords gets
-   * auto-clustered from a clean slate rather than being skipped by the
-   * "already clustered this signature" guard.
+   * v1.1.35/v1.1.38: execute whichever destructive delete the user has staged
+   * in `confirm`. "all" hits `?all=true`; "source" hits `?source=<name>` and
+   * only removes keywords from that ingestion source. Snapshots are preserved
+   * at the DB level (only the keywords table is touched) so the user's
+   * historical AIO-coverage view doesn't disappear. Cluster tracking refs are
+   * reset whenever the keyword *set* changes so the next add re-clusters from
+   * scratch rather than being skipped by the "already clustered this
+   * signature" guard.
    */
-  async function wipeAll() {
-    if (wiping) return;
+  async function runConfirmedDelete() {
+    if (wiping || !confirm) return;
     setWiping(true);
     setMsg(null);
     try {
-      const res = await fetch(`/api/projects/${projectId}/keywords?all=true`, { method: "DELETE" });
+      const url =
+        confirm.kind === "all"
+          ? `/api/projects/${projectId}/keywords?all=true`
+          : `/api/projects/${projectId}/keywords?source=${encodeURIComponent(confirm.source)}`;
+      const res = await fetch(url, { method: "DELETE" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Failed to delete keywords");
-      // Reset auto-cluster bookkeeping so the next keyword add re-clusters
-      // from scratch (otherwise the empty-signature shortcut blocks it).
-      lastClusteredSigRef.current = "";
-      lastClusteredAtRef.current = 0;
+      // v1.1.38: clear the cached cluster summary so the banner doesn't keep
+      // showing stale topic counts after the universe shrinks or empties.
+      // (The prior ref-based bookkeeping is gone now that auto-cluster only
+      // fires on add/upload.)
       setLastClusterSummary(null);
-      setMsg(`Removed ${j.deleted ?? 0} keyword${(j.deleted ?? 0) === 1 ? "" : "s"}. Universe is empty — add keywords to start over.`);
-      setConfirmingWipe(false);
+      const n = j.deleted ?? 0;
+      const noun = `keyword${n === 1 ? "" : "s"}`;
+      setMsg(
+        confirm.kind === "all"
+          ? `Removed ${n} ${noun}. Universe is empty — add keywords to start over.`
+          : `Removed ${n} ${confirm.source} ${noun}.`,
+      );
+      setConfirm(null);
       await load();
       onChanged();
     } catch (e: any) {
       setMsg(e.message);
     } finally {
+      // v1.1.39: belt-and-suspenders. Reset every gating flag, not just
+      // `wiping`. If a prior pipeline (an upload whose cluster step was
+      // killed by Vercel's function timeout, a manual cluster the user
+      // navigated away from, etc.) left `busy` or `clustering` stuck true,
+      // the post-delete UI would be unresponsive — buttons disabled, file
+      // picks silently dropped — until a browser refresh. The delete is a
+      // good "clear the deck" moment so we explicitly clear those too.
+      // These setters are no-ops when the values are already false.
       setWiping(false);
+      setBusy(false);
+      setClustering(false);
     }
   }
 
@@ -254,12 +251,11 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Clustering failed");
       setLastClusterSummary(j.clusters ?? null);
-      // v1.1.26: stamp the same cooldown refs so the auto-cluster effect knows
-      // a manual cluster just happened and respects the cooldown window.
-      lastClusteredAtRef.current = Date.now();
-      const sig = keywords.map((k) => k.keyword.toLowerCase().trim()).sort().join("|");
-      lastClusteredSigRef.current = sig;
       setMsg(`Clustered ${j.assigned} keyword${j.assigned === 1 ? "" : "s"} into ${j.clusters?.length ?? 0} topic group${(j.clusters?.length ?? 0) === 1 ? "" : "s"}.`);
+      // v1.1.38: refresh the local keyword list so the new cluster_label
+      // values render immediately — the prior signature-ref bookkeeping is
+      // gone now that auto-cluster is one-shot per add/upload.
+      await load();
       onChanged();
     } catch (e: any) {
       setMsg(e.message);
@@ -286,7 +282,7 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
               so we never tear the rug out from under another operation. */}
           {usage > 0 && (
             <button
-              onClick={() => setConfirmingWipe(true)}
+              onClick={() => setConfirm({ kind: "all" })}
               disabled={refreshing || clustering || wiping || busy}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
@@ -306,89 +302,159 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
         </div>
       </div>
 
-      {/* v1.1.35: Confirm modal for the destructive wipe. Renders as a fixed
-          overlay so it sits on top of everything regardless of scroll. The
-          actual click handler on the Confirm button still calls wipeAll() —
-          we don't trust the modal alone to gate behavior. */}
-      {confirmingWipe && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          style={{
-            position: "fixed", inset: 0, zIndex: 100,
-            background: "rgba(0,0,0,0.70)",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            padding: 20,
-          }}
-          onClick={(e) => {
-            // Backdrop-click closes the modal (but not while wiping is in
-            // flight — would otherwise leave the user wondering if it worked).
-            if (e.target === e.currentTarget && !wiping) setConfirmingWipe(false);
-          }}
-        >
+      {/* v1.1.35/v1.1.38: Confirm modal for destructive wipes. Renders as a
+          fixed overlay so it sits on top of everything regardless of scroll.
+          Body copy + button label adapt to whether the staged delete is the
+          global "all" wipe or a single-source wipe. The Confirm button still
+          calls runConfirmedDelete() — we don't trust the modal alone to gate
+          behavior. */}
+      {confirm && (() => {
+        const targetCount =
+          confirm.kind === "all" ? usage : confirm.count;
+        const targetLabel =
+          confirm.kind === "all"
+            ? `all ${targetCount.toLocaleString("en-US")} keyword${targetCount === 1 ? "" : "s"}`
+            : `${targetCount.toLocaleString("en-US")} ${confirm.source} keyword${targetCount === 1 ? "" : "s"}`;
+        const title =
+          confirm.kind === "all"
+            ? "Delete all keywords?"
+            : `Delete all "${confirm.source}" keywords?`;
+        const ctaLabel = wiping
+          ? "Deleting…"
+          : `Delete ${targetCount.toLocaleString("en-US")} keyword${targetCount === 1 ? "" : "s"}`;
+        return (
           <div
+            role="dialog"
+            aria-modal="true"
             style={{
-              background: "#0e1118",
-              border: "1px solid rgba(255,100,100,0.40)",
-              borderRadius: 12,
-              padding: 22,
-              maxWidth: 440, width: "100%",
-              boxShadow: "0 18px 60px rgba(0,0,0,0.50)",
+              position: "fixed", inset: 0, zIndex: 100,
+              background: "rgba(0,0,0,0.70)",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              padding: 20,
+            }}
+            onClick={(e) => {
+              // Backdrop-click closes the modal (but not while wiping is in
+              // flight — would otherwise leave the user wondering if it worked).
+              if (e.target === e.currentTarget && !wiping) setConfirm(null);
             }}
           >
-            <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-              <i className="ti ti-alert-triangle" style={{ fontSize: 18, color: "#ff6464" }} aria-hidden="true"></i>
-              <div style={{ fontSize: 15, fontWeight: 700, color: "#f4f6fb" }}>Delete all keywords?</div>
-            </div>
-            <p style={{ fontSize: 13, color: "#d6dbe6", lineHeight: 1.5, marginBottom: 14 }}>
-              This removes all <strong style={{ color: "#f4f6fb" }}>{usage.toLocaleString("en-US")}</strong> keyword{usage === 1 ? "" : "s"} from this project, including their cluster labels and any per-keyword volumes.
-            </p>
-            <p style={{ fontSize: 12, color: "#8a93a6", lineHeight: 1.5, marginBottom: 18 }}>
-              Past <strong style={{ color: "#d6dbe6" }}>snapshots are preserved</strong> — the AIO-coverage history stays available for what-changed comparisons. Only the keyword universe is wiped.
-            </p>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
-              <button
-                onClick={() => setConfirmingWipe(false)}
-                disabled={wiping}
-                style={{
-                  padding: "7px 13px", borderRadius: 8,
-                  background: "transparent",
-                  color: wiping ? "rgba(244,246,251,0.40)" : "#f4f6fb",
-                  fontSize: 13, fontWeight: 500,
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  cursor: wiping ? "not-allowed" : "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={wipeAll}
-                disabled={wiping}
-                style={{
-                  display: "inline-flex", alignItems: "center", gap: 5,
-                  padding: "7px 13px", borderRadius: 8,
-                  background: wiping ? "rgba(255,100,100,0.30)" : "#ff6464",
-                  color: "#0a0c10",
-                  fontSize: 13, fontWeight: 700,
-                  border: "none",
-                  cursor: wiping ? "not-allowed" : "pointer",
-                }}
-              >
-                <i className={`ti ${wiping ? "ti-loader-2" : "ti-trash"}`} style={{ fontSize: 13, animation: wiping ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
-                {wiping ? "Deleting…" : `Delete ${usage.toLocaleString("en-US")} keyword${usage === 1 ? "" : "s"}`}
-              </button>
+            <div
+              style={{
+                background: "#0e1118",
+                border: "1px solid rgba(255,100,100,0.40)",
+                borderRadius: 12,
+                padding: 22,
+                maxWidth: 440, width: "100%",
+                boxShadow: "0 18px 60px rgba(0,0,0,0.50)",
+              }}
+            >
+              <div style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <i className="ti ti-alert-triangle" style={{ fontSize: 18, color: "#ff6464" }} aria-hidden="true"></i>
+                <div style={{ fontSize: 15, fontWeight: 700, color: "#f4f6fb" }}>{title}</div>
+              </div>
+              <p style={{ fontSize: 13, color: "#d6dbe6", lineHeight: 1.5, marginBottom: 14 }}>
+                This removes {targetLabel.includes("keyword") ? <>
+                  <strong style={{ color: "#f4f6fb" }}>{targetLabel}</strong>
+                </> : targetLabel} from this project, including their cluster labels and any per-keyword volumes.
+                {confirm.kind === "source" && (
+                  <> Other sources are untouched.</>
+                )}
+              </p>
+              <p style={{ fontSize: 12, color: "#8a93a6", lineHeight: 1.5, marginBottom: 18 }}>
+                Past <strong style={{ color: "#d6dbe6" }}>snapshots are preserved</strong> — the AIO-coverage history stays available for what-changed comparisons. Only the keyword universe is wiped.
+              </p>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                <button
+                  onClick={() => setConfirm(null)}
+                  disabled={wiping}
+                  style={{
+                    padding: "7px 13px", borderRadius: 8,
+                    background: "transparent",
+                    color: wiping ? "rgba(244,246,251,0.40)" : "#f4f6fb",
+                    fontSize: 13, fontWeight: 500,
+                    border: "1px solid rgba(255,255,255,0.15)",
+                    cursor: wiping ? "not-allowed" : "pointer",
+                  }}
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={runConfirmedDelete}
+                  disabled={wiping}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "7px 13px", borderRadius: 8,
+                    background: wiping ? "rgba(255,100,100,0.30)" : "#ff6464",
+                    color: "#0a0c10",
+                    fontSize: 13, fontWeight: 700,
+                    border: "none",
+                    cursor: wiping ? "not-allowed" : "pointer",
+                  }}
+                >
+                  <i className={`ti ${wiping ? "ti-loader-2" : "ti-trash"}`} style={{ fontSize: 13, animation: wiping ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
+                  {ctaLabel}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-      <div className="text-xs mt-1 space-x-2">
-        {Object.entries(sourcesCount).map(([k, v]) => <span key={k} className="tag">{k}: {v}</span>)}
+        );
+      })()}
+      {/* v1.1.38: each source tag now gets a small trash button so users can
+          delete one "set" (e.g. an accidentally pasted CSV import) without
+          nuking other sources. Same two-step confirmation pattern as the
+          global Delete all button — clicking the trash stages the delete in
+          `confirm`, the modal collects the second click. The trash button is
+          disabled while another op (refresh / cluster / wipe / busy) is in
+          flight so we never tear out a source mid-cluster. */}
+      <div className="text-xs mt-1" style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {Object.entries(sourcesCount).map(([k, v]) => {
+          const opInFlight = refreshing || clustering || wiping || busy;
+          return (
+            <span
+              key={k}
+              className="tag"
+              style={{ display: "inline-flex", alignItems: "center", gap: 4, paddingRight: 4 }}
+            >
+              {k}: {v}
+              <button
+                type="button"
+                onClick={() => setConfirm({ kind: "source", source: k, count: v })}
+                disabled={opInFlight}
+                title={
+                  opInFlight
+                    ? (refreshing ? "Wait for refresh to finish first" : clustering ? "Wait for clustering to finish first" : "Please wait…")
+                    : `Delete all ${v} ${k} keyword${v === 1 ? "" : "s"}`
+                }
+                aria-label={`Delete all ${k} keywords`}
+                style={{
+                  display: "inline-flex", alignItems: "center", justifyContent: "center",
+                  width: 16, height: 16, padding: 0,
+                  borderRadius: 4,
+                  border: "none",
+                  background: "transparent",
+                  color: opInFlight ? "rgba(255,100,100,0.35)" : "#ff6464",
+                  cursor: opInFlight ? "not-allowed" : "pointer",
+                  lineHeight: 1,
+                }}
+              >
+                <i className="ti ti-x" style={{ fontSize: 11 }} aria-hidden="true"></i>
+              </button>
+            </span>
+          );
+        })}
       </div>
 
       {/* v1.1.11: single-line input for one-off keyword adds. Enter submits;
           comma-separated values still work for adding 2-3 at once. Bulk CSV
           upload sits next to it for true bulk imports. Volumes CSV removed —
           not used in the current workflow. */}
+      {/* v1.1.38: two equally-weighted primary CTAs. "Add manual" handles
+          single keywords and short comma-separated pastes via the text input.
+          "Upload CSV" handles bulk imports — it used to be a small ghost
+          label, which made it look secondary; users repeatedly missed it. The
+          file input lives inside the label so the whole button is the
+          target. Both buttons disable while busy / wiping so a slow add or
+          delete can't race a CSV upload. */}
       <div className="mt-3">
         <div className="flex items-center gap-2 flex-wrap">
           <input
@@ -405,41 +471,75 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
               }
             }}
           />
-          <label
-            className="cursor-pointer hover:text-white transition inline-flex items-center"
-            style={{ color: "var(--muted)", fontSize: 11, padding: "8px 10px", borderRadius: 6, border: "1px solid rgba(255,255,255,0.10)", whiteSpace: "nowrap" }}
-            title="Bulk-import from a CSV file (one keyword per row)"
+          <button
+            style={{
+              ...primaryBtnStyle(busy || !manualText.trim()),
+              display: "inline-flex", alignItems: "center", gap: 6,
+              whiteSpace: "nowrap",
+            }}
+            disabled={busy || !manualText.trim()}
+            onClick={submit}
+            title="Add the keyword(s) typed in the field"
           >
-            <i className="ti ti-upload" style={{ fontSize: 12, marginRight: 4 }} aria-hidden="true"></i>
-            Keywords CSV
+            <i className="ti ti-plus" style={{ fontSize: 13 }} aria-hidden="true"></i>
+            Add manual
+          </button>
+          <label
+            className="inline-flex items-center"
+            aria-disabled={busy || wiping}
+            style={{
+              display: "inline-flex", alignItems: "center", gap: 6,
+              padding: "9px 14px", borderRadius: 6,
+              background: busy || wiping ? "rgba(55, 138, 221, 0.15)" : "#102a3d",
+              color: busy || wiping ? "rgba(133, 183, 235, 0.45)" : "#85b7eb",
+              border: "1px solid #185fa5",
+              fontSize: 13, fontWeight: 600,
+              whiteSpace: "nowrap",
+              cursor: busy || wiping ? "not-allowed" : "pointer",
+            }}
+            title={busy || wiping ? "Please wait…" : "Bulk-import from a CSV file (one keyword per row)"}
+          >
+            <i className="ti ti-upload" style={{ fontSize: 13 }} aria-hidden="true"></i>
+            Upload CSV
             <input
               type="file"
               accept=".csv,text/csv"
               className="hidden"
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCsv(f); }}
+              disabled={busy || wiping}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                // v1.1.39: never silently drop an upload. Previously, if the
+                // user picked a file while `busy` or `wiping` was true (e.g.
+                // a slow delete that hadn't finished yet), the file was
+                // discarded with no UI feedback and the user thought the
+                // app was broken. Now we surface a clear message so they
+                // know to retry once the current op finishes.
+                if (f) {
+                  if (busy || wiping) {
+                    setMsg("Please wait for the current operation to finish, then try the upload again.");
+                  } else {
+                    uploadCsv(f);
+                  }
+                }
+                // Reset so picking the same file twice re-triggers onChange.
+                e.target.value = "";
+              }}
             />
           </label>
-          <button
-            style={primaryBtnStyle(busy || !manualText.trim())}
-            disabled={busy || !manualText.trim()}
-            onClick={submit}
-          >Add</button>
         </div>
       </div>
 
       {msg && <div className="mt-2 text-[11px] muted">{msg}</div>}
 
-      {/* Auto-clustering status. Clustering fires automatically:
-          - on initial load if any keyword lacks a cluster_label
-          - whenever a keyword is added, edited, or deleted
-          - debounced 3s so quick bulk adds coalesce into one call
-          - paused while a refresh is in flight (avoid the race in v1.1.10)
-          Minimum 5 keywords. */}
+      {/* v1.1.38: clustering policy. Auto-cluster fires exactly once after
+          each successful manual add or CSV upload (in submit / uploadCsv).
+          Edits, deletes, and initial mount no longer trigger it. The "Cluster
+          now" button always works for explicit re-runs. Minimum 5 keywords. */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 16, padding: "8px 11px", borderRadius: 9, background: "rgba(168,120,255,0.06)", border: "1px solid rgba(168,120,255,0.20)", gap: 12, flexWrap: "wrap" }}>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: "#a878ff", letterSpacing: "0.05em", textTransform: "uppercase", display: "inline-flex", alignItems: "center", gap: 5 }}>
             <i className={`ti ${clustering ? "ti-loader-2" : "ti-layers-subtract"}`} style={{ fontSize: 12, animation: clustering ? "spin 0.8s linear infinite" : undefined }} aria-hidden="true"></i>
-            {clustering ? "Auto-clustering…" : "Topic clustering · automatic"}
+            {clustering ? "Clustering…" : "Topic clustering · auto-runs once after each add"}
           </div>
           <div style={{ fontSize: 11, color: "#8a93a6", marginTop: 2 }}>
             {keywords.length < 5
@@ -447,13 +547,14 @@ export default function KeywordPanel({ projectId, onChanged, refreshing = false 
               : clustering
               ? "Grouping keywords into 5-8 topic buckets…"
               : lastClusterSummary && lastClusterSummary.length > 0
-              ? `Clustered into ${lastClusterSummary.length} topic${lastClusterSummary.length === 1 ? "" : "s"}: ${lastClusterSummary.map((c) => `${c.name} (${c.count})`).join(" · ")}`
-              : "Keywords will be auto-clustered shortly after you add them."}
+              ? `Clustered into ${lastClusterSummary.length} topic${lastClusterSummary.length === 1 ? "" : "s"}: ${lastClusterSummary.map((c) => `${c.name} (${c.count})`).join(" · ")}. Click Cluster now to re-run.`
+              : "Add or upload keywords and they'll be clustered once automatically. Use Cluster now for any re-runs."}
           </div>
         </div>
-        {/* v1.1.20: manual fallback. Auto-cluster usually fires on a 3s debounce
-            but if the user wants to trigger it immediately or auto-cluster
-            stalled out for any reason, this button forces a run right now. */}
+        {/* v1.1.38: Cluster now is now the user's primary lever for re-runs —
+            auto-cluster only fires once per add/upload, so this button is how
+            you re-cluster after edits, deletes, or any time you want a fresh
+            topic grouping. */}
         <button
           onClick={runClustering}
           disabled={clustering || keywords.length < 5}

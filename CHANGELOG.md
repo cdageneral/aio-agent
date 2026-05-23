@@ -4,6 +4,97 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.42] — 2026-05-23
+
+Make the relationship between the executive-summary "Your position" tile and the trend chart underneath obvious.
+
+### Changed
+- **"Acquisition rate" trend chart renamed to "Your position over time."** The previous label was vague and gave no hint that the chart was the time-series view of the same metric shown in the exec-summary tile. The new name makes the connection one-to-one.
+- **Trend-chart caption rewritten.** Was "Citation rate over time — {brand} vs tracked competitors." Now reads "Citation rate per refresh snapshot — {brand} (blue) vs tracked competitors. Each point = one refresh." Spells out that the X-axis is per-snapshot (not daily / weekly / on a fixed cadence) so users don't have to guess.
+- **Your-Position trend pill now shows absolute pt change.** Was "8% vs prior" — a growth rate of the raw acquired-count, which forced the user to mentally translate "8% growth in the underlying count" into "what does that mean for my citation rate?" Now reads "1.7 pts vs prior snapshot" — the literal point change in citation rate, using the `citation_rate_delta` field the metrics route already computed. The threshold for showing the pill drops from 1% relative change to 0.5 absolute pts; same rough sensitivity, more honest unit.
+
+### Why
+The user reported confusion about how "Your position" (point-in-time, 21.4% in their data) related to the trend chart underneath. Three concrete pain points came out of the conversation: the chart label was opaque, the time axis cadence was unstated, and the "Your position" card had no direct trend signal so users had to scan the chart below to know which direction the number was moving. This release addresses the first three together — same numbers, much clearer narrative.
+
+### Notes
+- No data shapes or API responses changed. `growth.brands[i].citation_rate_delta` was already in the metrics payload; we just started reading it.
+- The legacy `aios_acquired` growth-rate field on `growth.brands[i]` is still emitted by the metrics route — left alone in case anything else consumes it (PDF export, what-changed digest) and to avoid a wider blast radius for what's a UI-only fix.
+
+## [1.1.41] — 2026-05-23
+
+Cosmetic cleanup: the "AIO coverage" tile in the executive summary was duplicating the signal already carried by the headline.
+
+### Removed
+- **AIO coverage tile** from the 4-insight grid in `StoryPanel.tsx`. The tile showed `triggerPct` (total AIOs triggered / total keywords) with a "84 of 109 tracked queries" subtitle. The same number drives the headline copy that sits directly above it — "AIOs dominate this SERP" at ≥50%, "AIOs are reshaping this SERP" at ≥30%, "AIOs are emerging in this SERP" below that — so the tile was restating the headline's basis as a number. With the tile gone the at-a-glance signal is unchanged and the grid feels less crowded.
+
+### Notes
+- The grid uses `grid-template-columns: repeat(auto-fit, minmax(220px, 1fr))`, so the remaining three insights (Your position, Strongest cluster, Weakest cluster / Biggest battleground) reflow naturally on every viewport.
+- `triggerPct` itself stays computed — the headline still references it. No exported data shapes or downstream consumers (PDF export, what-changed digest, etc.) are touched.
+
+## [1.1.40] — 2026-05-23
+
+Hot-fix: the v1.1.37 refresh-progress bar wasn't appearing on click *or* on page reload mid-refresh. Two bugs in the polling wiring stacked together.
+
+### Fixed
+- **Polling never ran on mount.** The polling `useEffect` in `Dashboard.tsx` bailed early when `refreshing === false`, which is the initial state on every fresh page render. If the user reloaded the dashboard while a long refresh was running on the server — exactly the moment they'd want to come back and check on it — there was nothing polling and the progress bar never appeared. The effect now always polls on mount, with the cadence controlled by what the first poll returns.
+- **Freshness filter compared client clock against server clock.** The original `if (snapStartedMs + 5000 < refreshStartedAtRef.current) return;` filter compared the snapshot's `ran_at` (server clock) against `refreshStartedAtRef.current = Date.now()` (client clock). Any clock skew between Vercel and the browser — common across regions, especially when the user's machine is suspended/resumed — could incorrectly exclude a just-created snapshot. We now use the server-computed `elapsed_sec` directly, which removes the client/server clock dependency entirely.
+
+### Changed
+- **Recency rule is now status- and age-based.** The polling tick shows a snapshot when `status === "running"` (server thinks work is happening — stall detection inside the endpoint still catches zombies) OR when it finished within the last 10 minutes (so the user can see the final state briefly after completion). Older terminal snapshots are no longer surfaced — they'd be stale UI noise.
+- **Polling lifecycle is now self-managing.** Initial tick fires on mount. If the snapshot is `running`, the interval starts and runs at 2.5s cadence. Once the snapshot reaches a terminal status the interval stops but the final state stays visible. When the user clicks Refresh, the effect re-runs (because `refreshing` is in its dep array) and the interval resumes. Net effect: no wasted DB queries when nothing is happening, but the bar appears immediately when something starts — whether the user clicked it on this page load or on a previous one.
+
+### Removed
+- The `refreshStartedAtRef.current` filter check inside the polling tick. The ref is still set by `onRefresh()` (harmless) but no longer gates anything; the next pass can drop it entirely.
+
+### Why
+The user reported "I am not seeing the progress bar that we built show up when I refresh or when the system is running." Both phrasings point at the same gap — the bar relies on a click-triggered state flip (`refreshing`) to start polling, and a clock-comparison filter that's fragile across machines. The fix removes both fragile dependencies in favor of a server-driven recency signal (`elapsed_sec`) and a mount-time poll that doesn't care how the refresh started.
+
+### Notes
+- Server-side changes: none. The `/api/projects/[id]/refresh/progress` endpoint and `snapshotProgress` / `latestSnapshotAnyStatus` DB helpers are unchanged.
+- If you're staring at the dashboard during a long refresh and don't see the bar within ~3 seconds, hard-refresh once — there's a one-time cache invalidation needed for the new effect to register, but nothing persistent.
+
+## [1.1.39] — 2026-05-23
+
+Hot-fix: after deleting keywords, the next CSV upload appeared to do nothing until the user refreshed the browser. Two contributing causes addressed.
+
+### Fixed
+- **Silent-drop on CSV upload during transient state.** The file input's `onChange` previously checked `if (f && !busy && !wiping) uploadCsv(f)` and reset `e.target.value` regardless of whether the upload was kicked off. When `busy` or `wiping` was still settling (e.g., a slow delete or a background cluster call that hadn't fully resolved), the user's file pick was discarded with zero feedback — the file picker closed, no message appeared, and the user reasonably assumed the app was broken. Now the same gate surfaces a clear `setMsg("Please wait for the current operation to finish, then try the upload again.")` so the user knows to retry instead of refreshing.
+- **State left stuck after delete.** `runConfirmedDelete` only reset `wiping` in its `finally` block. If any prior pipeline (an upload whose cluster step was killed by Vercel's `maxDuration`, a manual cluster the user navigated away from mid-call, etc.) left `busy` or `clustering` stuck `true`, the post-delete UI was unresponsive — Add manual, Upload CSV, and the source-trash buttons would all stay disabled — until a browser refresh wiped React state. The `finally` now resets all three gating flags (`wiping`, `busy`, `clustering`). The setters are no-ops when the values are already false, so the happy path is unchanged.
+
+### Why
+The reproducer ("after I deleted, I could not upload until I refreshed") points squarely at client-side stuck state — browser refresh resets all React state, which is exactly the failure surface here. The silent-drop fix removes the worst part of the failure mode (no feedback at all) for any user who encounters it; the belt-and-suspenders state reset prevents the underlying stuck state from biting when delete is the next action.
+
+### Notes
+- Neither change touches the API or the database. Hot-fix is client-only — `components/KeywordPanel.tsx` is the only file modified.
+- If you see "Please wait for the current operation to finish…" right after clicking Upload CSV, that's the new message firing. Wait a moment for the in-flight op to finish, then try the upload again. If the message appears with no visible operation running, that's a bug worth flagging.
+
+## [1.1.38] — 2026-05-23
+
+Make the keyword universe easier to manage: delete a single source as a "set", give CSV upload equal billing with manual entry, and stop re-clustering on every tiny change.
+
+### Added
+- **Per-source delete control** — each source tag in `KeywordPanel` (e.g. `manual: 5,625`, `organic: 312`) now has a small trash button. Clicking it opens the existing destructive-action confirm modal, scoped to that source ("Delete all 5,625 manual keywords? Other sources are untouched."). Only the keywords with that source are removed; other sources, snapshots, and project settings are untouched.
+- **`lib/db.ts` → `deleteKeywordsBySource(project_id, source)`** new helper. Single `DELETE FROM keywords WHERE project_id = … AND source = …` returning row count.
+- **`DELETE /api/projects/[id]/keywords?source=<name>`** new scoped delete path. Source is validated against the `manual | organic | market | seed` enum so a bad value can't reach the DB. The existing `?all=true` and `?keyword_id=…` paths are unchanged.
+
+### Changed
+- **Add manual + Upload CSV are now equally-weighted primary CTAs.** Previously the CSV upload was a small ghost-styled label that read as secondary; users repeatedly missed it. Both buttons now have full primary styling — green/plus for "Add manual", blue/upload for "Upload CSV" — sitting side-by-side in the input row.
+- **The CSV `<input type="file">` now resets its value after each pick**, so re-uploading the same filename actually re-triggers the upload. Previously a same-name re-pick was a no-op.
+- **Auto-clustering is now one-shot per add/upload.** The previous behavior auto-clustered on a 3s debounce whenever the keyword *set signature* changed — initial mount, edits, deletes, every add. That generated surprising re-cluster runs and forced two layers of guards (signature ref + 30s cooldown ref) to avoid loops. The new policy: clustering fires automatically *exactly once* after a successful manual add or CSV upload, and never automatically otherwise. Edits, deletes, page loads, and per-source wipes no longer trigger clustering. The manual "Cluster now" button is unchanged.
+- **Confirm modal is now shared** between the global "Delete all" wipe and the per-source wipes. Title, body copy, and CTA label adapt to whether the staged delete is `{ kind: "all" }` or `{ kind: "source", source, count }`.
+- **Cluster banner copy** updated to reflect the new policy: "Topic clustering · auto-runs once after each add" with a "Click Cluster now to re-run" hint after a successful cluster.
+
+### Removed
+- **Signature-based auto-cluster guards** (`lastClusteredSigRef`, `lastClusteredAtRef`) and the 30-second cooldown logic from v1.1.26. They were defensive scaffolding around the useEffect-driven auto-cluster loop bug, which no longer exists now that clustering is event-driven rather than state-driven. `useRef` import dropped from `KeywordPanel.tsx`.
+
+### Why
+Three pain points stacked up. (1) Users with mixed-source universes had no way to drop just one source — only "delete this single keyword" or "wipe everything". The trash-on-tag pattern reuses the existing confirm-modal flow so the destructive UX stays consistent. (2) Hiding CSV upload behind a ghost label made bulk imports invisible to new users — multiple support pings about "how do I upload?". Promoting it to a real primary button is a one-line discoverability fix. (3) Auto-clustering on every keyword-set change burned Anthropic credits, surfaced as visible spinner churn during routine editing, and required a knotted set of guards to stay correct. Tying clustering to the actual user intent ("I just added new keywords, group them") is simpler, cheaper, and matches user expectation.
+
+### Notes
+- **Snapshots are still preserved.** Same rationale as v1.1.35 — only the `keywords` table is touched by either wipe path.
+- **Edits no longer re-cluster.** If you edit a keyword and want the new text re-grouped, click "Cluster now". Same for after deletes.
+- **First-time-loading existing unclustered universes won't auto-cluster.** This is intentional — the old auto-cluster-on-mount behavior is gone. If you open a project where keywords have no `cluster_label` (e.g., legacy projects pre-v1.1.6), click "Cluster now" once to populate them.
+
 ## [1.1.37] — 2026-05-22
 
 Add a live refresh progress bar so the user can tell whether a long SerpAPI run is moving or hung.
