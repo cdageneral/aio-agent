@@ -38,7 +38,18 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
 
   const snap = await latestSnapshot(project.id);
-  if (!snap) return NextResponse.json({ snapshot: null, opportunities: [] });
+  if (!snap) {
+    return NextResponse.json({
+      snapshot: null,
+      opportunities: [],
+      // v1.1.49: diagnostic block surfaces enough state for the UI's empty
+      // copy to be specific about WHY nothing is showing — instead of the
+      // generic "every AIO won or no AIOs triggered or wrong region" hand-
+      // wave. When there's literally no snapshot, the block is null and the
+      // UI says "no snapshot yet, run a refresh."
+      diagnostics: null,
+    });
+  }
 
   const url = new URL(req.url);
   const regionParam = url.searchParams.get("region");
@@ -126,9 +137,56 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
 
   opportunities.sort((a, b) => b.score - a.score || b.citation_count - a.citation_count);
 
+  // v1.1.49: snapshot-level diagnostics for the empty-state copy. These
+  // counts are computed on the same filtered set the opportunities loop runs
+  // against, so any zero-state can be explained concretely:
+  //   - serps_in_region_total: serp_results rows that match the region filter
+  //   - aios_in_region: of those, how many actually triggered an AIO
+  //   - aios_won_by_client: of those, how many already cite the client (=> not gaps)
+  //   - aios_open_gaps: aios_in_region - aios_won_by_client (matches opportunities.length)
+  // When opportunities is empty, the UI can show "Latest snapshot has X AIOs
+  // in <region>, all X already cited by <brand>" instead of guessing.
+  const aios_in_region = filtered.length;
+  const aios_won_by_client = filtered.reduce((acc, s) => {
+    const c = citesByResult.get(s.id) ?? [];
+    return acc + (c.some((x) => domainMatches(x.domain, project.client_domain)) ? 1 : 0);
+  }, 0);
+  // For "total queries crawled in this region" (a separate signal from
+  // "AIOs found in this region") we run one small extra count query. Cheap,
+  // and saves an "is the region even covered by the snapshot?" guessing
+  // game in the empty state copy.
+  const { rows: totalRows } = await sql<{ c: number }>`
+    SELECT COUNT(*)::int AS c FROM serp_results WHERE snapshot_id = ${snap.id};
+  `;
+  const total_serps_in_snapshot = totalRows[0]?.c ?? 0;
+  // serps_in_region_total: count of serps in the requested region. With
+  // Vercel Postgres' tagged-template not supporting `= ANY($1::text[])`
+  // with a JS-array binding, we use a UNNEST + literal-array trick that
+  // works across both pg and Vercel Postgres. Region values are already
+  // lowercased + validated upstream so this is safe.
+  const regionsCSV = (regions ?? []).join(",");
+  const serps_in_region_total = regions && regions.length > 0
+    ? (await sql<{ c: number }>`
+        SELECT COUNT(*)::int AS c
+        FROM serp_results
+        WHERE snapshot_id = ${snap.id}
+          AND LOWER(country) IN (SELECT UNNEST(STRING_TO_ARRAY(${regionsCSV}, ',')));
+      `).rows[0]?.c ?? 0
+    : total_serps_in_snapshot;
+
   return NextResponse.json({
     snapshot: snap,
     opportunities: opportunities.slice(0, limit),
     total_opportunities: opportunities.length,
+    diagnostics: {
+      snapshot_ran_at: snap.ran_at,
+      regions_in_view: regions ?? null,
+      total_serps_in_snapshot,
+      serps_in_region_total,
+      aios_in_region,
+      aios_won_by_client,
+      aios_open_gaps: opportunities.length,
+      client_brand: project.brand_name,
+    },
   });
 }

@@ -4,6 +4,28 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.49] — 2026-05-23
+
+The AIO Opportunities empty state now tells you exactly why it's empty.
+
+### Added
+- **Diagnostic block in `/api/projects/[id]/quick-wins`.** Response now carries a `diagnostics` object: `snapshot_ran_at`, `regions_in_view`, `total_serps_in_snapshot`, `serps_in_region_total`, `aios_in_region`, `aios_won_by_client`, `aios_open_gaps`, `client_brand`. Server-computed against the same filtered set the opportunities loop runs on, so the numbers always match the panel's reality.
+
+### Changed
+- **`QuickWinsPanel` empty state now selects copy based on the diagnostic block.** Five distinct messages map to the five ways the panel can legitimately be empty:
+  - **No completed snapshot** (`!diagnostics`): "Run a refresh first."
+  - **Region not in snapshot** (`serps_in_region_total === 0`): "Latest snapshot didn't include [region] — 0 queries crawled here. Switch the region toggle or click Run refresh."
+  - **Region crawled but no AIOs** (`aios_in_region === 0`): "Crawled N queries in [region] — 0 triggered an AIO."
+  - **All AIOs already won** (`aios_open_gaps === 0`): "N AIOs in [region], all already cited by [brand]. No gaps to chase — defend what you have."
+  - **Filter exclusion** (gaps exist server-side but the client got 0 rows): "N open gaps in [region] but none match the current cluster/kind filters."
+
+### Why
+The reporter has now seen the empty-state copy three times across v1.1.44 → v1.1.47 → v1.1.48, each time after a different change, and we've been guessing what the actual snapshot contains. This release stops the guessing — the next time the panel renders an empty state, the message itself will tell us which of the five scenarios is actually happening. From there the fix path is obvious.
+
+### Notes
+- KeywordExplorer (drilldown) is deliberately NOT updated in this release. Quick-wins is the cleaner instrument because it computes both "what's in the snapshot" and "what's a gap." Once we know what the quick-wins diagnostic reports, the drilldown empty state will follow.
+- The `serps_in_region_total` count uses a small extra `SELECT COUNT(*)` query, gated by region. Net DB cost is one indexed count per quick-wins request, negligible.
+
 ## [1.1.48] — 2026-05-23
 
 Diagnostic release: refresh failures are now impossible to miss.

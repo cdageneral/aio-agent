@@ -45,6 +45,20 @@ export default function QuickWinsPanel({
   const [wins, setWins] = useState<QuickWin[] | null>(null);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  // v1.1.49: snapshot diagnostics — populated alongside `wins` from the same
+  // /quick-wins response. Lets the empty state render specific copy
+  // ("16 AIOs in Canada, all 16 already cited by CHIP") instead of the
+  // generic three-causes hand-wave.
+  const [diagnostics, setDiagnostics] = useState<{
+    snapshot_ran_at: string;
+    regions_in_view: string[] | null;
+    total_serps_in_snapshot: number;
+    serps_in_region_total: number;
+    aios_in_region: number;
+    aios_won_by_client: number;
+    aios_open_gaps: number;
+    client_brand: string;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +70,7 @@ export default function QuickWinsPanel({
     const j = await res.json();
     setWins(j.opportunities ?? []);
     setTotal(j.total_opportunities ?? 0);
+    setDiagnostics(j.diagnostics ?? null);
     setLoading(false);
   }, [projectId, region, kindFilter]);
 
@@ -85,18 +100,53 @@ export default function QuickWinsPanel({
   // shrink and snap the user's scroll position upward.
   if (loading && !wins) return <div className="text-sm muted">Scoring opportunities…</div>;
   if (!wins || wins.length === 0) {
-    // v1.1.44: more diagnostic empty state. The most common cause for this
-    // panel being empty when the rest of the dashboard has data is a region
-    // filter mismatch — the snapshot was crawled for one region (e.g. US)
-    // and the user has the toggle set to another (e.g. Canada). Mentioning
-    // it explicitly turns "huh, broken?" into "oh, switch the region."
+    // v1.1.44/v1.1.49: data-driven empty state. Instead of guessing among
+    // "every AIO won / no AIOs / wrong region", we read the diagnostics the
+    // server sent back and tell the user exactly which one it is.
     const regionLabel = region === "us" ? "USA" : region === "ca" ? "Canada" : "USA + Canada";
+    let diagnosis: React.ReactNode;
+    if (!diagnostics) {
+      diagnosis = (
+        <>No completed snapshot for this project yet. Run a refresh first.</>
+      );
+    } else if (diagnostics.serps_in_region_total === 0) {
+      // Snapshot exists but didn't crawl this region at all.
+      diagnosis = (
+        <>
+          The latest snapshot didn&apos;t include <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> — 0 queries crawled here
+          {diagnostics.total_serps_in_snapshot > 0 && (
+            <> (snapshot has {diagnostics.total_serps_in_snapshot.toLocaleString()} queries in other regions)</>
+          )}
+          . Switch the region toggle to one the snapshot covers, or click Run refresh to re-crawl with the current toggle.
+        </>
+      );
+    } else if (diagnostics.aios_in_region === 0) {
+      // Region was crawled but no AIOs triggered.
+      diagnosis = (
+        <>
+          Crawled {diagnostics.serps_in_region_total.toLocaleString()} queries in <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> — 0 of them triggered an AIO. Either AIOs aren&apos;t showing for these queries in this region right now, or the universe needs more AIO-prone keywords.
+        </>
+      );
+    } else if (diagnostics.aios_open_gaps === 0) {
+      // AIOs exist but every one is already won by the client.
+      diagnosis = (
+        <>
+          <strong style={{ color: "#f4f6fb" }}>{diagnostics.aios_in_region.toLocaleString()}</strong> AIO{diagnostics.aios_in_region === 1 ? "" : "s"} in <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong>, all already cited by <strong style={{ color: "#f4f6fb" }}>{diagnostics.client_brand}</strong>. No gaps to chase — defend what you have.
+        </>
+      );
+    } else {
+      // Server reported open gaps but client got 0 rows — probably a client-
+      // side filter (cluster, kind) that excluded everything.
+      diagnosis = (
+        <>
+          {diagnostics.aios_open_gaps.toLocaleString()} open gap{diagnostics.aios_open_gaps === 1 ? "" : "s"} in <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong>, but none match the current cluster/kind filters. Clear the filters above to see them.
+        </>
+      );
+    }
     return (
       <div className="text-sm muted" style={{ padding: 18, lineHeight: 1.5 }}>
-        No gettable opportunities for <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> in the latest snapshot.
-        <div style={{ fontSize: 12, color: "#5a6478", marginTop: 6 }}>
-          Most common causes: every AIO in this region is already won, no AIOs were triggered, or the latest snapshot wasn&apos;t crawled with this region. Try switching the region toggle or running a refresh that includes it.
-        </div>
+        <div>No gettable opportunities for <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> in the latest snapshot.</div>
+        <div style={{ fontSize: 12, color: "#8a93a6", marginTop: 8 }}>{diagnosis}</div>
       </div>
     );
   }
