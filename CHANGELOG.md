@@ -4,6 +4,25 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.43] — 2026-05-23
+
+The COMPETITOR MOVEMENT strip ("Edward Jones CAN +16 new citations") was great for a glance but a dead end if you wanted to know *which* 16 keywords. Now each competitor is click-through.
+
+### Added
+- **Click-through competitor movement.** Each brand chip in the strip is now a button. Clicking it expands an inline accordion below the strip with two stacked lists: **Gained** (keywords the competitor newly got cited on) and **Lost** (keywords they were cited on last snapshot but aren't now). Each row shows keyword + country + position + an AIO-answer snippet excerpt for context. Click a different brand to swap; click the same brand again to collapse.
+- **Losses tracked, not just gains.** The previous diff only counted competitors gaining new citations. v1.1.43 also tracks competitors *losing* citations between snapshots. Chips show `+N` (green) for gains and `−N` (red) for losses; brands with either kind of movement are clickable. Brands that ONLY had losses now surface in the strip too (previously hidden because the only signal was `competitor_gained`).
+- **AIO snippet helper.** New `snippet()` utility on the server normalises whitespace and trims AIO answer text to ~160 characters before sending — keeps the accordion rows scannable instead of walls of text.
+
+### Changed
+- **/api/projects/[id]/changes endpoint** now returns a new `competitor_movement` field shaped as `[{brand_name, net, gained_count, lost_count, gained: [...], lost: [...]}]`. The legacy `competitor_gained` (counts only) is still emitted for backward compat — the digest-copy Slack template still uses it.
+- **Snapshot load query** now pulls `aio_text` from `serp_results` so the snippet can be rendered without a second fetch. Same query, one more column.
+
+### Notes
+- Each accordion list caps at 25 rows server-side. If a brand has more movement than that, the chip-side count is the real total and the in-panel list shows "top 25 shown".
+- The accordion uses the existing region filter, so toggling US / Canada updates the lists.
+- No database schema changes. Pure read-side computation off the two snapshots already being diffed.
+- The PDF export and digest copier are untouched in this release — they still summarise *just gains* via the legacy field. Wiring the new richer detail into either is a follow-up.
+
 ## [1.1.42] — 2026-05-23
 
 Make the relationship between the executive-summary "Your position" tile and the trend chart underneath obvious.

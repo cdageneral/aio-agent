@@ -21,12 +21,16 @@ interface KwState {
   keyword: string;
   country: string;
   has_aio: boolean;
+  // v1.1.43: AIO answer text carried through so the competitor click-through
+  // can show a snippet alongside each gained/lost keyword. Nullable for
+  // historical rows that predate AIO storage.
+  aio_text: string | null;
   citations: { domain: string; position: number }[];
 }
 
 async function loadSnapshot(snapshotId: string): Promise<Map<string, KwState>> {
-  const { rows: serps } = await sql<{ id: string; keyword: string; country: string; has_aio: boolean }>`
-    SELECT id, keyword, country, has_aio FROM serp_results WHERE snapshot_id = ${snapshotId};`;
+  const { rows: serps } = await sql<{ id: string; keyword: string; country: string; has_aio: boolean; aio_text: string | null }>`
+    SELECT id, keyword, country, has_aio, aio_text FROM serp_results WHERE snapshot_id = ${snapshotId};`;
   const { rows: cites } = await sql<{ serp_result_id: string; domain: string; position: number }>`
     SELECT serp_result_id, domain, position FROM citations WHERE snapshot_id = ${snapshotId};`;
   const cm = new Map<string, { domain: string; position: number }[]>();
@@ -42,10 +46,22 @@ async function loadSnapshot(snapshotId: string): Promise<Map<string, KwState>> {
       keyword: s.keyword,
       country: s.country,
       has_aio: s.has_aio,
+      aio_text: s.aio_text,
       citations: cm.get(s.id) ?? [],
     });
   }
   return out;
+}
+
+// v1.1.43: shared helper — trims an AIO answer to a short, scan-friendly
+// snippet for inline display. Aggressive cap because the click-through panel
+// shows up to 25 rows per competitor; a verbose paragraph per row would be a
+// wall of text.
+function snippet(text: string | null): string | null {
+  if (!text) return null;
+  const clean = text.replace(/\s+/g, " ").trim();
+  if (clean.length <= 160) return clean;
+  return clean.slice(0, 157).trimEnd() + "…";
 }
 
 function bestPosition(state: KwState | undefined, domain: string): number | null {
@@ -81,6 +97,26 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const new_aios: { keyword: string; country: string; citation_count: number }[] = [];
   const competitor_gained = new Map<string, number>();
 
+  // v1.1.43: per-competitor keyword-level movement. The legacy
+  // competitor_gained Map (counts only) is kept for backward compat with the
+  // digest copier; this new structure carries the full keyword list so the
+  // UI can click-through a brand name and see which queries drove the
+  // delta. Both directions (gained AND lost) are tracked.
+  type CompMoveRow = {
+    keyword: string;
+    country: string;
+    position: number;
+    aio_snippet: string | null;
+  };
+  type CompLostRow = {
+    keyword: string;
+    country: string;
+    lost_position: number;
+    aio_snippet: string | null;
+  };
+  const compGainedKeywords = new Map<string, CompMoveRow[]>();
+  const compLostKeywords = new Map<string, CompLostRow[]>();
+
   const keys = new Set<string>([...curState.keys(), ...prevState.keys()]);
   for (const k of keys) {
     const c = curState.get(k);
@@ -97,12 +133,33 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     if (cPos != null && pPos != null && cPos > pPos) moved_down.push({ keyword: c!.keyword, country: c!.country, from: pPos, to: cPos });
     if (c?.has_aio && !p?.has_aio) new_aios.push({ keyword: c.keyword, country: c.country, citation_count: c.citations.length });
 
-    // Competitor newly-cited tracking
+    // Competitor movement tracking — both directions, with keyword-level
+    // detail so the UI can drill into "which 16 keywords did Edward Jones
+    // newly win?". Snippet comes from whichever side actually has an AIO.
     for (const comp of competitors) {
       const newPos = bestPosition(c, comp.domain);
       const oldPos = bestPosition(p, comp.domain);
       if (newPos != null && oldPos == null) {
+        // Gained: newly cited this snapshot.
         competitor_gained.set(comp.brand_name, (competitor_gained.get(comp.brand_name) ?? 0) + 1);
+        const arr = compGainedKeywords.get(comp.brand_name) ?? [];
+        arr.push({
+          keyword: (c ?? p)!.keyword,
+          country: (c ?? p)!.country,
+          position: newPos,
+          aio_snippet: snippet(c?.aio_text ?? null),
+        });
+        compGainedKeywords.set(comp.brand_name, arr);
+      } else if (newPos == null && oldPos != null) {
+        // Lost: was cited last snapshot, isn't now.
+        const arr = compLostKeywords.get(comp.brand_name) ?? [];
+        arr.push({
+          keyword: (c ?? p)!.keyword,
+          country: (c ?? p)!.country,
+          lost_position: oldPos,
+          aio_snippet: snippet(p?.aio_text ?? c?.aio_text ?? null),
+        });
+        compLostKeywords.set(comp.brand_name, arr);
       }
     }
   }
@@ -132,5 +189,29 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       new_aios: new_aios.length,
     },
     competitor_gained: Array.from(competitor_gained.entries()).map(([brand_name, count]) => ({ brand_name, count })).sort((a, b) => b.count - a.count),
+    // v1.1.43: full per-competitor movement with keyword lists, so the UI can
+    // click-through a competitor name and see which queries drove the delta.
+    // Includes brands that only had losses (count > 0 in lost map but missing
+    // from gained map) so a brand that's slipping shows up too.
+    competitor_movement: (() => {
+      const brandNames = new Set<string>([
+        ...compGainedKeywords.keys(),
+        ...compLostKeywords.keys(),
+      ]);
+      const rows = Array.from(brandNames).map((brand_name) => {
+        const gained = (compGainedKeywords.get(brand_name) ?? []).slice().sort((a, b) => a.position - b.position);
+        const lost = (compLostKeywords.get(brand_name) ?? []).slice().sort((a, b) => a.lost_position - b.lost_position);
+        return {
+          brand_name,
+          net: gained.length - lost.length,
+          gained_count: gained.length,
+          lost_count: lost.length,
+          gained: gained.slice(0, limit),
+          lost: lost.slice(0, limit),
+        };
+      });
+      // Sort by absolute movement so the noisiest brands surface first.
+      return rows.sort((a, b) => Math.abs(b.net) - Math.abs(a.net) || b.gained_count - a.gained_count);
+    })(),
   });
 }

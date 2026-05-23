@@ -15,6 +15,17 @@ interface ChangesPayload {
   new_aios?: { keyword: string; country: string; citation_count: number }[];
   counts?: { newly_won: number; newly_lost: number; moved_up: number; moved_down: number; new_aios: number };
   competitor_gained?: { brand_name: string; count: number }[];
+  // v1.1.43: per-competitor keyword-level movement for the click-through.
+  // gained/lost arrays carry keyword + country + position + AIO snippet so the
+  // accordion can render the rows without re-fetching anything per-brand.
+  competitor_movement?: {
+    brand_name: string;
+    net: number;
+    gained_count: number;
+    lost_count: number;
+    gained: { keyword: string; country: string; position: number; aio_snippet: string | null }[];
+    lost: { keyword: string; country: string; lost_position: number; aio_snippet: string | null }[];
+  }[];
 }
 
 /**
@@ -32,6 +43,10 @@ export default function WhatChangedPanel({
   const [data, setData] = useState<ChangesPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  // v1.1.43: which competitor's keyword-level movement is currently expanded
+  // in the Competitor Movement strip. null = collapsed; a brand name = its
+  // accordion is open. Click the same name to collapse.
+  const [expandedBrand, setExpandedBrand] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -123,18 +138,113 @@ export default function WhatChangedPanel({
         <ChangeList title="📊 Position worsened" items={(data.moved_down ?? []).map(w => ({ keyword: w.keyword, country: w.country, detail: `#${w.from} → #${w.to}` }))} accent="#ffb846" empty="No drops in position." />
       </div>
 
-      {(data.competitor_gained ?? []).length > 0 && (
+      {/* v1.1.43: Competitor movement is now click-through. Each brand chip
+          is a button; clicking it expands an inline accordion below the
+          strip with the keyword-level breakdown (Gained / Lost) plus AIO
+          snippets. Prefer `competitor_movement` (richer payload) when
+          present; fall back to the legacy `competitor_gained` counts for
+          older snapshots that haven't been re-diffed.
+          Strip shows whenever EITHER source has rows so we don't lose
+          backward compat on historical diffs. */}
+      {((data.competitor_movement ?? []).length > 0 || (data.competitor_gained ?? []).length > 0) && (
         <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 10, background: "rgba(255,93,158,0.06)", border: "1px solid rgba(255,93,158,0.18)" }}>
-          <div style={{ fontSize: 11, color: "#ff5d9e", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 6 }}>Competitor movement</div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, fontSize: 13 }}>
-            {data.competitor_gained!.map((c) => (
-              <span key={c.brand_name}>
-                <strong style={{ color: "#f4f6fb" }}>{c.brand_name}</strong>{" "}
-                <span style={{ color: "#b6f53b", fontWeight: 600 }}>+{c.count}</span>
-                <span style={{ color: "#5a6478" }}> new citations</span>
-              </span>
-            ))}
+          <div style={{ fontSize: 11, color: "#ff5d9e", fontWeight: 700, letterSpacing: "0.05em", textTransform: "uppercase", marginBottom: 8, display: "flex", alignItems: "center", gap: 8 }}>
+            Competitor movement
+            <span style={{ fontSize: 10, color: "#8a93a6", fontWeight: 500, letterSpacing: 0, textTransform: "none" }}>
+              click a brand to see the keywords
+            </span>
           </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, fontSize: 13 }}>
+            {(data.competitor_movement && data.competitor_movement.length > 0
+              ? data.competitor_movement
+              : (data.competitor_gained ?? []).map((c) => ({
+                  brand_name: c.brand_name,
+                  net: c.count,
+                  gained_count: c.count,
+                  lost_count: 0,
+                  gained: [],
+                  lost: [],
+                }))
+            ).map((c) => {
+              const isOpen = expandedBrand === c.brand_name;
+              const gain = c.gained_count;
+              const loss = c.lost_count;
+              const clickable = gain > 0 || loss > 0;
+              return (
+                <button
+                  key={c.brand_name}
+                  type="button"
+                  onClick={() => clickable && setExpandedBrand(isOpen ? null : c.brand_name)}
+                  disabled={!clickable}
+                  aria-expanded={isOpen}
+                  style={{
+                    display: "inline-flex", alignItems: "center", gap: 5,
+                    padding: "5px 10px", borderRadius: 7,
+                    background: isOpen ? "rgba(255,93,158,0.18)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid ${isOpen ? "rgba(255,93,158,0.50)" : "rgba(255,255,255,0.08)"}`,
+                    color: "#f4f6fb", fontSize: 13, fontWeight: 500,
+                    cursor: clickable ? "pointer" : "default",
+                    transition: "background-color 120ms ease, border-color 120ms ease",
+                  }}
+                  title={clickable ? `Click to see the ${gain ? `${gain} gained` : ""}${gain && loss ? " / " : ""}${loss ? `${loss} lost` : ""} keyword${gain + loss === 1 ? "" : "s"}` : "No keyword detail for this brand"}
+                >
+                  <strong style={{ color: "#f4f6fb", fontWeight: 600 }}>{c.brand_name}</strong>
+                  {gain > 0 && <span style={{ color: "#b6f53b", fontWeight: 600 }}>+{gain}</span>}
+                  {loss > 0 && <span style={{ color: "#ff6464", fontWeight: 600 }}>−{loss}</span>}
+                  {clickable && (
+                    <i className={`ti ${isOpen ? "ti-chevron-up" : "ti-chevron-down"}`} style={{ fontSize: 12, color: "#8a93a6" }} aria-hidden="true" />
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Expanded accordion — shows for the currently-clicked brand. */}
+          {expandedBrand && (() => {
+            const c = (data.competitor_movement ?? []).find((m) => m.brand_name === expandedBrand);
+            if (!c) return null;
+            const showCap = (lst: { length: number } | undefined) =>
+              lst && lst.length === 25 ? " (top 25 shown)" : "";
+            return (
+              <div
+                style={{
+                  marginTop: 12,
+                  padding: "12px 14px",
+                  background: "rgba(0,0,0,0.30)",
+                  border: "1px solid rgba(255,93,158,0.22)",
+                  borderRadius: 9,
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+                  gap: 14,
+                }}
+              >
+                <CompMoveList
+                  title={`Gained · ${c.gained_count}${showCap(c.gained)}`}
+                  accent="#b6f53b"
+                  empty={`${c.brand_name} did not newly gain any keywords this snapshot.`}
+                  rows={c.gained.map((g) => ({
+                    keyword: g.keyword,
+                    country: g.country,
+                    position: g.position,
+                    direction: "gained" as const,
+                    aio_snippet: g.aio_snippet,
+                  }))}
+                />
+                <CompMoveList
+                  title={`Lost · ${c.lost_count}${showCap(c.lost)}`}
+                  accent="#ff6464"
+                  empty={`${c.brand_name} did not drop from any keywords this snapshot.`}
+                  rows={c.lost.map((l) => ({
+                    keyword: l.keyword,
+                    country: l.country,
+                    position: l.lost_position,
+                    direction: "lost" as const,
+                    aio_snippet: l.aio_snippet,
+                  }))}
+                />
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
@@ -165,6 +275,68 @@ function ChangeList({ title, items, accent, empty }: { title: string; items: { k
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * v1.1.43: keyword-detail list rendered inside the Competitor Movement
+ * accordion. Each row is a keyword the selected competitor either newly
+ * gained citations on (`direction = "gained"`, position is current) or
+ * dropped from (`direction = "lost"`, position is the prior snapshot's).
+ * AIO snippet is rendered as a second line under the keyword for context
+ * — capped server-side at ~160 chars so the row isn't a wall of text.
+ */
+function CompMoveList({
+  title,
+  accent,
+  empty,
+  rows,
+}: {
+  title: string;
+  accent: string;
+  empty: string;
+  rows: {
+    keyword: string;
+    country: string;
+    position: number;
+    direction: "gained" | "lost";
+    aio_snippet: string | null;
+  }[];
+}) {
+  return (
+    <div style={{ background: "#0c0f15", border: "1px solid rgba(255,255,255,0.06)", borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 11, color: accent, fontWeight: 700, letterSpacing: "0.04em", textTransform: "uppercase", marginBottom: 8 }}>{title}</div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 12, color: "#5a6478", lineHeight: 1.5 }}>{empty}</div>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0, maxHeight: 280, overflowY: "auto" }}>
+          {rows.map((r, i) => (
+            <li
+              key={`${r.keyword}|${r.country}|${i}`}
+              style={{
+                padding: "8px 0",
+                borderBottom: "1px solid rgba(255,255,255,0.04)",
+                fontSize: 12.5,
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+                <span style={{ color: "#d6dbe6", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontWeight: 500 }}>
+                  {r.keyword}
+                </span>
+                <span style={{ color: accent, fontWeight: 600, flexShrink: 0, fontVariantNumeric: "tabular-nums", fontSize: 11.5 }}>
+                  {r.country.toUpperCase()} · {r.direction === "gained" ? `cited #${r.position}` : `was #${r.position}`}
+                </span>
+              </div>
+              {r.aio_snippet && (
+                <div style={{ marginTop: 4, fontSize: 11.5, color: "#8a93a6", lineHeight: 1.5 }}>
+                  {r.aio_snippet}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
