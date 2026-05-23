@@ -15,6 +15,10 @@ import { getProject, listCompetitors, listSnapshots } from "@/lib/db";
 import { domainMatches } from "@/lib/domain";
 
 export const runtime = "nodejs";
+// v1.1.51: opt out of Vercel's static-response cache — same reasoning as the
+// quick-wins route. Snapshot diff must reflect the latest two completed
+// snapshots, not whatever the CDN cached on first hit.
+export const dynamic = "force-dynamic";
 
 interface KwState {
   serp_id: string;

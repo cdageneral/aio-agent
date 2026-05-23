@@ -19,6 +19,10 @@ import { computeSnapshotMetrics, growthRate, BrandSpec, CitationRow, SerpResultR
 import type { KeywordKind } from "@/lib/keywordKind";
 
 export const runtime = "nodejs";
+// v1.1.51: opt out of Vercel's static-response cache. The metrics endpoint
+// happened to escape the cache problem that hit quick-wins and drilldown,
+// but making this explicit prevents future regressions.
+export const dynamic = "force-dynamic";
 
 /** v1.1.27: parse ?kind= into one of three modes. Defaults to "all". */
 function parseKind(raw: string | null): "all" | KeywordKind {

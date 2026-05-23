@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.51] — 2026-05-23
+
+The root cause of every "panels are empty even though the snapshot has data" symptom: Vercel's data cache was freezing the first response from each route handler and serving it forever.
+
+### Fixed
+- **`export const dynamic = "force-dynamic"` added to every GET route that reads database state.** Without this opt-out, Next.js + Vercel can freeze a route handler's first response as a cacheable static response. When the first hit happened during initial setup (no snapshot yet existed), the cache locked in `{snapshot: null}` as the canonical response. Every subsequent request to `/api/projects/[id]/quick-wins` and `/api/projects/[id]/keywords/detail` returned that frozen null even after refreshes successfully created complete snapshots in the database. The `/metrics` route happened to escape the cache (likely because of its heavier computation pattern or its multi-table query mix), which is why the dashboard's executive summary showed real data while the AIO Opportunities and Keyword Drilldown panels stayed empty.
+- Applied to: `quick-wins`, `keywords/detail`, `metrics`, `refresh/progress`, `changes`. Mutation routes (POST/DELETE) are already dynamic; this is for the read paths.
+
+### Why
+The reporter pasted two API responses side by side: `metrics` returned a complete snapshot from 18:53 with 81 AIOs and CHIP at 21% citation rate; `quick-wins` returned `{snapshot: null}`; `keywords/detail` also returned `{snapshot: null}`. Same DB, same `latestSnapshot()` helper, two routes disagreeing with a third. The only mechanism that can produce that pattern is response caching that's per-route — which is exactly what Next.js + Vercel will do for routes that don't explicitly opt out. Adding `force-dynamic` reverts those endpoints to running fresh per request.
+
+### Notes
+- After deploying this, you should refresh the project page in your browser once. The cached null responses are baked into Vercel's CDN; they may take a few seconds to fully clear, but every request after this deploy goes to a fresh function invocation.
+- If you somehow still see empty panels after the v1.1.51 deploy, hit the quick-wins URL directly in your browser once and confirm it now returns the real opportunities. From there everything else falls into place.
+- This is genuinely the missing piece. Every "the snapshot exists but the panel is empty" symptom for the past several releases ladders back to this caching gap.
+
 ## [1.1.50] — 2026-05-23
 
 Hot-fix on a hot-fix: v1.1.49's diagnostic SQL was breaking the quick-wins endpoint, and the client was eating the resulting 500 as "no completed snapshot."

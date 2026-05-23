@@ -15,6 +15,9 @@ import { getProject, latestSnapshot, listCompetitors } from "@/lib/db";
 import { domainMatches } from "@/lib/domain";
 
 export const runtime = "nodejs";
+// v1.1.51: opt out of Vercel's static-response cache — see quick-wins route
+// for the full backstory. Same symptom would affect this endpoint.
+export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const project = await getProject(ctx.params.id);
