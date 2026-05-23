@@ -4,6 +4,41 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.45] — 2026-05-23
+
+Hot-fix: zombie progress bars. A snapshot stuck in `running` status from a long-killed Vercel invocation would keep appearing as a stalled refresh on every page load — hours or days after the actual function had died. Three layers of fix.
+
+### Fixed
+- **Server-side zombie auto-fail.** `GET /api/projects/[id]/refresh/progress` now permanently marks any `running` snapshot older than 10 minutes as `failed` via `finalizeSnapshot`, with a synthetic error message explaining what happened. Vercel's hard max for a function is 60s (Hobby) or 300s (Pro) — a snapshot still showing as `running` ten minutes after `ran_at` is definitively a zombie, not a live job. One DB write per zombie on the first poll past the threshold; thereafter the row reads as `failed` and gets filtered out by the existing 10-minute terminal-freshness window. Net effect: a stale "Refresh stalled" banner that survived across page reloads now self-cleans on the next visit.
+- **Client-side age cap (defense-in-depth).** Dashboard's polling tick no longer trusts `status === "running"` alone — it also requires `elapsed_sec ≤ 600`. So even if the server-side auto-fail hasn't run yet (race on the very first poll, transient DB issue), the client refuses to render a 13-hour-old "running" snapshot as live.
+
+### Added
+- **Dismiss button on the refresh progress strip.** Small ✕ in the top-right corner of `RefreshProgress`. Click to clear the bar immediately without waiting for the freshness window to close. Renders only for terminal statuses (`complete` / `failed` / stalled) so an actively running refresh can't be hidden by accident.
+
+### Why
+The reporter walked into an existing project and saw a "Refresh stalled" banner for an old 5,615-keyword run that died 13 hours ago, even though the current keyword universe is only 109. The progress endpoint was correctly reading the most-recent snapshot regardless of status (that's how mid-refresh polls work), but had no way to recognize when a `running` snapshot was clearly dead. Auto-failing past the Vercel-time-limit threshold turns the data into the truth — that snapshot is failed — and every downstream consumer (this endpoint, the snapshots list, the dashboard polling effect, anywhere else that touches snapshot status) gets the right answer.
+
+### Notes
+- Once you load a project after this fix, the zombie snapshot from your earlier session will be auto-failed on the first poll (one quick DB write) and the bar will disappear. No data is lost — `serp_results` rows from the partial run stay in place; only the snapshot's `status` flips from `running` to `failed`.
+- The "stalled" callout that fires inside an active refresh (status still `running`, no progress in 60s) is unchanged — that's still useful while a refresh is genuinely in flight.
+
+## [1.1.44] — 2026-05-23
+
+Hot-fix: the region toggle wasn't applied consistently across the dashboard, so the exec summary and the detail panels could disagree on whether there was data.
+
+### Fixed
+- **Region filter applied to the latest-snapshot metrics computation** in `app/api/projects/[id]/metrics/route.ts`. Previously this call passed only `{ kind }` while the historical-series computation a few lines above passed `{ regions, kind }`. The result: a user with the region selector set to Canada-only would see the executive summary, KPI cards, and story panel happily showing all-region data, while AIO Opportunities and Keyword Drilldown — both of which correctly respected the filter — returned empty. Same snapshot, two views, opposite verdicts. Now every consumer of the latest payload sees the same region-scoped picture.
+
+### Changed
+- **More diagnostic empty-state messages** in `QuickWinsPanel.tsx` and `KeywordExplorer.tsx`. Previously the messages were either "No gettable opportunities right now…" or "No keyword data yet. Run a refresh first." — both correct but not actionable. The new copy names the region in play ("No gettable opportunities for **Canada** in the latest snapshot.") and surfaces region-filter mismatch as the most common cause, so the user's next move ("switch region toggle or re-refresh with Canada included") is obvious. The drilldown also splits its empty state into "no completed snapshot at all" vs "snapshot exists but is empty for this region" so the two failure modes don't share one message.
+
+### Why
+The reporter's symptom was "the exec summary shows populated data but AIO Opportunities and Keyword Drilldown are empty — what's going on?" The exec summary was unintentionally showing US data while the detail panels honestly reported zero rows for the selected Canada filter. Once both halves of the dashboard agree on what region they're scoped to, the situation becomes legible: "this snapshot doesn't cover Canada — refresh it to see Canadian results."
+
+### Notes
+- No database schema or API contract changes. Pure behavior fix in two TypeScript files, plus prose tweaks in two components.
+- If you previously relied on the exec summary showing all-region data regardless of the toggle, you'll now see it filter. Set the region selector to **Both** to restore the prior all-region view.
+
 ## [1.1.43] — 2026-05-23
 
 The COMPETITOR MOVEMENT strip ("Edward Jones CAN +16 new citations") was great for a glance but a dead end if you wanted to know *which* 16 keywords. Now each competitor is click-through.

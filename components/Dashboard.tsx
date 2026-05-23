@@ -241,8 +241,17 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           return;
         }
 
-        const isFresh =
-          snap.status === "running" || (snap.elapsed_sec ?? 0) < 600;
+        // v1.1.45: defense-in-depth zombie filter. The progress endpoint
+        // now auto-fails snapshots stuck in 'running' beyond ZOMBIE_THRESHOLD
+        // (10 min), but on the very first poll after a long absence the
+        // status flip may not have happened yet. Belt-and-suspenders: also
+        // refuse to treat a 'running' snapshot older than 10 minutes as
+        // fresh on the client. Net result: stale 13h-old "refresh stalled"
+        // banners can't survive even one tick.
+        const elapsedSec = snap.elapsed_sec ?? 0;
+        const isLiveRunning = snap.status === "running" && elapsedSec <= 600;
+        const isRecentTerminal = snap.status !== "running" && elapsedSec < 600;
+        const isFresh = isLiveRunning || isRecentTerminal;
         if (!isFresh) {
           setRefreshProgress(null);
           stopInterval();
@@ -251,10 +260,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
         setRefreshProgress(snap);
 
-        if (snap.status === "running") {
+        if (isLiveRunning) {
           startInterval();
         } else {
-          // Terminal status — keep the result on screen but stop polling.
+          // Terminal status (or auto-failed zombie) — keep the result on
+          // screen for the freshness window but stop polling.
           stopInterval();
         }
       } catch { /* swallow — transient network errors during polling are fine */ }
@@ -310,7 +320,16 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       {/* v1.1.37: live refresh progress. Shown whenever we have a polled
           snapshot object — covers both the actively-running case and the
           recently-completed/failed case so the final counts stay visible. */}
-      {refreshProgress && <RefreshProgress data={refreshProgress} />}
+      {refreshProgress && (
+        <RefreshProgress
+          data={refreshProgress}
+          // v1.1.45: dismiss button on the progress strip. Clearing
+          // refreshProgress hides the bar immediately (no waiting for the
+          // 10-min freshness window). The button only renders for terminal
+          // statuses so an in-flight refresh can't accidentally be hidden.
+          onDismiss={() => setRefreshProgress(null)}
+        />
+      )}
 
       {refreshMsg && <div className="text-sm muted">{refreshMsg}</div>}
 

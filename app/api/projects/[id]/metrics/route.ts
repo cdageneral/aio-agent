@@ -123,7 +123,15 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       arr.push(c);
       citesById.set(c.serp_result_id, arr);
     }
-    latest = computeSnapshotMetrics(serps as SerpResultRow[], citesById, brands, { kind: kindFilter });
+    // v1.1.44: pass the region filter through to the latest computation so the
+    // executive summary, story panel, KPI cards, etc. stay consistent with
+    // the rest of the dashboard. Previously this call omitted `regions`,
+    // which meant a user with the region selector set to Canada-only would
+    // see populated all-region data in the exec summary while quick-wins
+    // and the drilldown — both of which DO respect the filter — returned
+    // empty. Same data, two views, contradictory output. Bringing this call
+    // into line with the historical-series computation (line ~99) fixes it.
+    latest = computeSnapshotMetrics(serps as SerpResultRow[], citesById, brands, { regions, kind: kindFilter });
   }
 
   // Period-over-period growth (latest vs previous completed)

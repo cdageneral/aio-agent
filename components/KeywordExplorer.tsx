@@ -203,7 +203,24 @@ export default function KeywordExplorer({
   // user's scroll position back up.
   if (loading && !data) return <div className="text-sm muted">Loading keyword detail…</div>;
   if (!data || data.keywords.length === 0) {
-    return <div className="text-sm muted">No keyword data yet. Run a refresh first.</div>;
+    // v1.1.44: split the empty-state message so a region-filter mismatch is
+    // explicit. When `data` itself is null we genuinely have no completed
+    // snapshot. When `data.keywords` is empty after fetch, the snapshot
+    // exists but contains nothing matching the current region (most often
+    // the snapshot was crawled for a different region than the toggle is
+    // currently set to).
+    const regionLabel = region === "us" ? "USA" : region === "ca" ? "Canada" : "USA + Canada";
+    if (!data) {
+      return <div className="text-sm muted">No completed snapshot yet. Run a refresh first.</div>;
+    }
+    return (
+      <div className="text-sm muted" style={{ lineHeight: 1.5 }}>
+        No keyword detail for <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> in the latest snapshot.
+        <div style={{ fontSize: 12, color: "#5a6478", marginTop: 4 }}>
+          The current snapshot didn&apos;t include this region. Switch the region toggle above, or run a refresh that covers it.
+        </div>
+      </div>
+    );
   }
 
   return (

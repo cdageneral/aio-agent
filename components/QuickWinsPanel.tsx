@@ -85,9 +85,18 @@ export default function QuickWinsPanel({
   // shrink and snap the user's scroll position upward.
   if (loading && !wins) return <div className="text-sm muted">Scoring opportunities…</div>;
   if (!wins || wins.length === 0) {
+    // v1.1.44: more diagnostic empty state. The most common cause for this
+    // panel being empty when the rest of the dashboard has data is a region
+    // filter mismatch — the snapshot was crawled for one region (e.g. US)
+    // and the user has the toggle set to another (e.g. Canada). Mentioning
+    // it explicitly turns "huh, broken?" into "oh, switch the region."
+    const regionLabel = region === "us" ? "USA" : region === "ca" ? "Canada" : "USA + Canada";
     return (
-      <div className="text-sm muted" style={{ padding: 18 }}>
-        No gettable opportunities right now — either every AIO is already won, or no AIOs are triggered yet.
+      <div className="text-sm muted" style={{ padding: 18, lineHeight: 1.5 }}>
+        No gettable opportunities for <strong style={{ color: "#f4f6fb" }}>{regionLabel}</strong> in the latest snapshot.
+        <div style={{ fontSize: 12, color: "#5a6478", marginTop: 6 }}>
+          Most common causes: every AIO in this region is already won, no AIOs were triggered, or the latest snapshot wasn&apos;t crawled with this region. Try switching the region toggle or running a refresh that includes it.
+        </div>
       </div>
     );
   }

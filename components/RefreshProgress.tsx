@@ -38,7 +38,20 @@ function fmtInt(n: number): string {
   return n.toLocaleString("en-US");
 }
 
-export default function RefreshProgress({ data }: { data: RefreshProgressData }) {
+export default function RefreshProgress({
+  data,
+  onDismiss,
+}: {
+  data: RefreshProgressData;
+  /**
+   * v1.1.45: optional dismiss handler. When provided, a small ✕ button
+   * appears in the top-right of the progress strip. Clicking it clears the
+   * Dashboard's refreshProgress state immediately so the user doesn't have
+   * to wait for the 10-minute freshness window to close. Omitted handler =
+   * no dismiss button (used in printable / export contexts).
+   */
+  onDismiss?: () => void;
+}) {
   const { total, done, aios_so_far, failed_so_far, pct, elapsed_sec, stalled, status, error } = data;
   const pctRounded = Math.round(pct * 100);
   const rate = elapsed_sec > 0 ? done / elapsed_sec : 0;
@@ -87,8 +100,39 @@ export default function RefreshProgress({ data }: { data: RefreshProgressData })
             </span>
           )}
         </div>
-        <div style={{ fontSize: 22, fontWeight: 700, color: barColor, fontVariantNumeric: "tabular-nums" }}>
-          {pctRounded}%
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 12 }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: barColor, fontVariantNumeric: "tabular-nums" }}>
+            {pctRounded}%
+          </div>
+          {/* v1.1.45: dismiss button. Lets the user clear a stalled / failed /
+              completed progress bar immediately instead of waiting for the
+              10-minute freshness window to close. Hidden during active live
+              runs to avoid people accidentally hiding the bar while a refresh
+              is genuinely making progress. */}
+          {onDismiss && status !== "running" && (
+            <button
+              type="button"
+              onClick={onDismiss}
+              aria-label="Dismiss refresh status"
+              title="Dismiss"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 26,
+                height: 26,
+                borderRadius: 6,
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.10)",
+                color: "#8a93a6",
+                cursor: "pointer",
+                lineHeight: 1,
+                padding: 0,
+              }}
+            >
+              <i className="ti ti-x" style={{ fontSize: 14 }} aria-hidden="true" />
+            </button>
+          )}
         </div>
       </div>
 
