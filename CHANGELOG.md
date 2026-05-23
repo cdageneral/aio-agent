@@ -4,6 +4,36 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.47] — 2026-05-23
+
+The region toggle on the dashboard now actually controls what gets crawled when you click Refresh.
+
+### Changed
+- **`onRefresh()` auto-persists the region toggle before firing the refresh.** Previously the toggle was a view-only filter — users would set it to Canada, click Refresh, and get back a US-only snapshot because the server reads `project.regions` (not the toggle) to decide what to crawl. The toggle's intent was always "show me this region," not "crawl this region," but in practice users expected one click to do both. A separate "Save changes" button in the header could persist the toggle, but it was easy to miss and required a two-step dance: toggle → save → refresh. Now `onRefresh()` checks whether the toggle's `regionsForMode()` differs from the persisted `project.regions`, and if so, PATCHes the project with the new regions before posting `/refresh`. The dance becomes one step.
+
+### Why
+The reporter walked through "set toggle to Canada → click Refresh → still see no Canadian data" and it took the new diagnostic empty-state messages (v1.1.44) to surface that the project itself hadn't been crawled with Canada. Fixing the empty-state messaging was a partial fix; aligning the toggle's behavior with user expectation is the real fix.
+
+### Notes
+- The PATCH happens before `POST /refresh` and is non-fatal: if the persist fails for a transient reason, we still fire the refresh with whatever the server thinks the regions are. The user will see the warning in the console and the toggle change will simply not take effect this refresh — they can try again.
+- Header's "Save changes" button still works for users who want to persist region (or other settings) without firing a refresh. The two paths just stay aligned now.
+- This does mean toggling the region selector and clicking Refresh is irreversible-without-another-refresh — you can't preview Canada-only without committing the project to crawling Canada. If anyone needs a true "view-only" override later we can re-introduce it with a separate control.
+
+## [1.1.46] — 2026-05-23
+
+Hot-fix: v1.1.45 fixed the zombie progress bar by auto-failing old `running` snapshots, but introduced a regression where clicking Run Refresh after a zombie cleanup showed no progress bar at all.
+
+### Fixed
+- **Polling no longer stops on the auto-failed zombie response.** When the user clicks Refresh while a stale zombie snapshot is still the most-recent row in the DB, the very first poll happens in a tiny window before the server's `POST /refresh` has called `createSnapshot`. The endpoint returns the zombie, the auto-fail kicks in, the now-failed zombie comes back as stale (status='failed', elapsed > 600s), and the v1.1.45 client correctly hid it — but it also called `stopInterval()`. Subsequent polls never fired, so the new running snapshot the server was about to create never appeared, and the bar stayed hidden. The Dashboard polling tick now keeps the interval alive while `refreshing === true`, even if the current snapshot reads as stale; the next 2.5s tick catches the new snapshot the moment the server makes it.
+
+### Why
+The v1.1.45 design assumed "snapshot is stale → nothing to show → stop polling." That's the right rule when the user lands on the page cold. It's the wrong rule mid-refresh, because the staleness is transient — a new snapshot is incoming. Tying the interval-lifetime to BOTH the snapshot freshness AND the user's refresh state closes the gap.
+
+### Notes
+- No API or DB changes. The progress endpoint's zombie auto-fail logic from v1.1.45 is unchanged.
+- After installing: clicking Run Refresh should now show the progress bar within ~2.5 seconds (one polling tick), regardless of what zombies the project has lying around.
+- If you still don't see a bar after Refresh, hard-reload the page once — there's a one-time bundle cache invalidation needed for the new effect to register.
+
 ## [1.1.45] — 2026-05-23
 
 Hot-fix: zombie progress bars. A snapshot stuck in `running` status from a long-killed Vercel invocation would keep appearing as a stalled refresh on every page load — hours or days after the actual function had died. Three layers of fix.

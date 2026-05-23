@@ -168,6 +168,34 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     refreshStartedAtRef.current = Date.now();
     setRefreshProgress(null);
     try {
+      // v1.1.47: align the persisted project.regions with the current region
+      // toggle BEFORE firing the refresh. The toggle was historically a
+      // view-only filter — users would set it to Canada, hit Refresh, and
+      // get back a US-only snapshot because the server reads project.regions
+      // (not the toggle) to decide what to crawl. Auto-persisting here makes
+      // "I selected Canada and clicked Refresh → it crawls Canada" actually
+      // true, without forcing the user to find and click a separate "Save
+      // changes" button in the header.
+      const desiredRegions = regionsForMode(region);
+      const persistedRegions = (data?.project?.regions ?? ["us"]).slice().sort();
+      const desiredSorted = desiredRegions.slice().sort();
+      const regionsChanged =
+        persistedRegions.length !== desiredSorted.length ||
+        persistedRegions.some((r: string, i: number) => r !== desiredSorted[i]);
+      if (regionsChanged) {
+        const patchRes = await fetch(`/api/projects/${projectId}`, {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ regions: desiredRegions }),
+        });
+        if (!patchRes.ok) {
+          // Don't block the refresh on a persist failure — fall through and
+          // crawl whatever the server thinks the regions are. The user just
+          // won't get the new region until next time.
+          const j = await patchRes.json().catch(() => ({}));
+          console.warn("[onRefresh] failed to persist region change:", j);
+        }
+      }
       const res = await fetch(`/api/projects/${projectId}/refresh`, { method: "POST" });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Refresh failed");
@@ -242,29 +270,42 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         }
 
         // v1.1.45: defense-in-depth zombie filter. The progress endpoint
-        // now auto-fails snapshots stuck in 'running' beyond ZOMBIE_THRESHOLD
+        // auto-fails snapshots stuck in 'running' beyond ZOMBIE_THRESHOLD
         // (10 min), but on the very first poll after a long absence the
         // status flip may not have happened yet. Belt-and-suspenders: also
         // refuse to treat a 'running' snapshot older than 10 minutes as
-        // fresh on the client. Net result: stale 13h-old "refresh stalled"
-        // banners can't survive even one tick.
+        // fresh on the client.
         const elapsedSec = snap.elapsed_sec ?? 0;
         const isLiveRunning = snap.status === "running" && elapsedSec <= 600;
         const isRecentTerminal = snap.status !== "running" && elapsedSec < 600;
         const isFresh = isLiveRunning || isRecentTerminal;
+
         if (!isFresh) {
+          // v1.1.46: critical fix. If `refreshing` is true the user JUST
+          // kicked off POST /refresh and the new snapshot is incoming on
+          // the server; the only snapshot the endpoint can return on this
+          // tick is whatever was latest BEFORE the click (frequently a
+          // recently-auto-failed zombie). Stopping the interval here would
+          // mean we never see the new snapshot appear. Keep polling — the
+          // next tick will catch the new running snapshot. We still hide
+          // the bar in the meantime so the user doesn't see a phantom
+          // "stalled" banner during the gap.
           setRefreshProgress(null);
-          stopInterval();
+          if (!refreshing) stopInterval();
           return;
         }
 
         setRefreshProgress(snap);
 
-        if (isLiveRunning) {
+        if (isLiveRunning || refreshing) {
+          // Keep polling while there's a live snapshot OR the user is
+          // mid-refresh (so we can swap in the new snapshot the moment
+          // the server creates it).
           startInterval();
         } else {
-          // Terminal status (or auto-failed zombie) — keep the result on
-          // screen for the freshness window but stop polling.
+          // Terminal status (or auto-failed zombie) AND no refresh in
+          // flight — keep the result on screen for the freshness window
+          // but stop polling.
           stopInterval();
         }
       } catch { /* swallow — transient network errors during polling are fine */ }
