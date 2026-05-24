@@ -20,6 +20,12 @@ import WhatChangedPanel from "./WhatChangedPanel";
 import OtherDomainsTabs from "./OtherDomainsTabs";
 import InfoTooltip from "./InfoTooltip";
 import RefreshProgress, { type RefreshProgressData } from "./RefreshProgress";
+// v1.1.55: handlers for the relocated Copy PPT Prompt / Export Full Report
+// buttons now live here (lifted out of ProjectHeader). They get registered
+// with the global header via headerActionsStore so the buttons render up
+// next to the "All Projects" nav link.
+import { exportFullReportToPdf, buildPptPrompt } from "@/lib/export";
+import { setHeaderActions, clearHeaderActions } from "@/lib/headerActionsStore";
 
 export interface MetricsPayload {
   project: any;
@@ -350,6 +356,89 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     };
   }, [projectId, refreshing]);
 
+  // v1.1.55: handlers for the global-header Export Full Report & Copy PPT
+  // Prompt buttons. Lifted out of ProjectHeader so the Dashboard (which
+  // already holds project + latest + regionLabel) can register them with
+  // the headerActionsStore without prop-drilling. The buttons themselves
+  // (HeaderActions.tsx) own their loading state so this layer doesn't need
+  // to re-render on each click.
+  const exportReportHandler = useCallback(async () => {
+    if (typeof document === "undefined") return;
+    const root = document.querySelector('[data-aio-report-root="true"]') as HTMLElement | null;
+    if (!root) {
+      console.error("Full report export: dashboard root not found");
+      return;
+    }
+    const proj = data?.project;
+    const regionLbl = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
+    try {
+      await exportFullReportToPdf(root, {
+        brand_name: proj?.brand_name ?? "—",
+        client_url: proj?.client_url ?? "—",
+        region_label: regionLbl,
+      });
+    } catch (e) {
+      console.error("Full report export failed", e);
+    }
+  }, [data, region]);
+
+  const copyPptPromptHandler = useCallback(async () => {
+    if (typeof navigator === "undefined") return;
+    const proj = data?.project;
+    const regionLbl = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
+    const prompt = buildPptPrompt(data?.latest ?? null, {
+      brand_name: proj?.brand_name ?? "—",
+      client_url: proj?.client_url ?? "—",
+      region_label: regionLbl,
+      universe_label: proj?.segment_l3 ?? proj?.segment_l2 ?? proj?.segment_l1 ?? undefined,
+    });
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(prompt);
+      } else if (typeof window !== "undefined") {
+        // Clipboard unavailable — surface the prompt in a new tab so the
+        // user can still copy it manually.
+        const w = window.open("", "_blank");
+        if (w) {
+          w.document.write(
+            `<pre style="white-space:pre-wrap;font:14px monospace;padding:20px">${prompt.replace(
+              /[&<>]/g,
+              (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c] ?? c),
+            )}</pre>`,
+          );
+        }
+      }
+    } catch (e) {
+      console.error("PPT prompt copy failed", e);
+    }
+  }, [data, region]);
+
+  // Push current handlers + state into the global header store on every
+  // change that matters. Cleared on unmount so the buttons disappear when
+  // the user navigates back to the Projects index.
+  useEffect(() => {
+    setHeaderActions({
+      projectLabel: data?.project?.brand_name,
+      refreshing,
+      hasMetrics: Boolean(data?.latest),
+      onRunRefresh: onRefresh,
+      onExportReport: exportReportHandler,
+      onCopyPptPrompt: copyPptPromptHandler,
+    });
+    return () => clearHeaderActions();
+  }, [
+    data?.project?.brand_name,
+    data?.latest,
+    refreshing,
+    exportReportHandler,
+    copyPptPromptHandler,
+    // onRefresh is stable enough — it's a closure on the same Dashboard
+    // instance — but we include the deps that drive its behavior via the
+    // surrounding state so we re-register if they change.
+    region,
+    projectId,
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // v1.1.29: only collapse to the full-page loader on the very FIRST load (when
   // data is still null). Subsequent refetches — scope toggle, region change,
   // any onChanged() trigger — keep the existing dashboard rendered with the
@@ -358,21 +447,21 @@ export default function Dashboard({ projectId }: { projectId: string }) {
   if (!data) return <div className="text-sm muted">Loading…</div>;
   const { project, competitors, latest, series, growth } = data;
 
-  // v1.1.32: human label for the active region scope. Surfaced on the
-  // Full-Report PDF cover page so the print is self-describing months later.
-  const regionLabel = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
+  // v1.1.32 / v1.1.55: human label for the active region scope. Originally
+  // surfaced on the Full-Report PDF cover page via a ProjectHeader prop.
+  // In v1.1.55 the export handler moved up here (see exportReportHandler
+  // above) and computes its own regionLabel inline, so this constant is
+  // currently not consumed in JSX. Kept as a documented anchor in case a
+  // future header pill wants to display the scope.
+  // const regionLabel = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
 
   return (
     <div className="space-y-8" data-aio-report-root="true">
       <ProjectHeader
         project={project}
         onSaved={load}
-        onRefresh={onRefresh}
-        refreshing={refreshing}
         region={region}
         onRegionChange={setRegion}
-        regionLabel={regionLabel}
-        latestMetrics={latest}
         onCompetitorsSuggested={(c) => {
           // De-dupe against currently tracked competitors AND the existing suggestion list.
           const trackedDomains = new Set<string>(competitors.map((x: any) => (x.domain ?? "").toLowerCase()));

@@ -2,6 +2,7 @@ import "./globals.css";
 import type { Metadata } from "next";
 import Link from "next/link";
 import Script from "next/script";
+import HeaderActions from "@/components/HeaderActions";
 
 export const metadata: Metadata = {
   title: "AIO Coverage Tracker",
@@ -13,7 +14,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en">
       <body>
         <header style={{ borderBottom: "1px solid var(--line)" }}>
-          <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between">
+          <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center justify-between gap-4">
             <Link href="/" className="flex items-center gap-2.5">
               <div
                 className="w-8 h-8 rounded-lg grid place-items-center text-xs font-bold"
@@ -23,8 +24,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               </div>
               <span className="font-semibold tracking-tight">AIO Coverage Tracker</span>
             </Link>
+            {/* v1.1.55: nav was previously just a single "Projects" link.
+                Renamed to "All Projects" (to disambiguate from individual
+                project pages) and now sits adjacent to HeaderActions, which
+                renders the per-project Copy PPT Prompt / Export Full Report /
+                Run refresh buttons when a Dashboard is mounted. On non-project
+                routes HeaderActions returns null so the bar collapses cleanly. */}
             <nav className="text-sm flex items-center gap-4">
-              <Link href="/" className="muted hover:text-white transition">Projects</Link>
+              <Link href="/" className="muted hover:text-white transition">All Projects</Link>
+              <HeaderActions />
             </nav>
           </div>
         </header>

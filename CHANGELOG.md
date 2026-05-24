@@ -4,6 +4,26 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.55] — 2026-05-23
+
+UI cleanup — the per-project action buttons now live in the global header, and the nav link is more descriptive.
+
+### Changed
+- **Copy PPT Prompt, Export Full Report, and Run refresh moved to the global header.** These three buttons used to sit at the bottom-right of the `ProjectHeader` panel — to fire any of them after scrolling through the dashboard you had to scroll back up to the top of the page. They now render in the top app header (`app/layout.tsx`) next to the "All Projects" nav link, so they're reachable from anywhere on the page without scrolling. On non-project routes (`/`, `/projects/new`) the buttons collapse to nothing — the header bar just shows the nav link.
+- **"Projects" nav link renamed to "All Projects".** Disambiguates it from individual project pages and pairs better with the per-project action buttons that now sit next to it ("All Projects | Copy PPT Prompt | Export Full Report | Run refresh"). Still routes to `/`.
+- **"Save changes" button stays in `ProjectHeader`.** It's tied to the local form's dirty-state — only meaningful in proximity to the inputs that drive it — so relocating it to the global header would have been misleading. Only renders when there are unsaved edits, same as before.
+
+### How (new wiring)
+- New `lib/headerActionsStore.ts` — a small module-level subscription store (using `useSyncExternalStore`) that lets the `Dashboard` register the three action handlers + their current state (refreshing, hasMetrics) once. The header subscribes via a tiny client component and reads whatever's currently registered. Chose a module store over React Context because the header lives in the root layout (above the page tree); plumbing context all the way down would have required wrapping every page in a client-only RootShell, which is overkill for a 3-button surface.
+- New `components/HeaderActions.tsx` — client component embedded in the layout's `<nav>`. Subscribes to the store, returns `null` when no project page has registered actions, otherwise renders the three buttons with their original disabled-state semantics (Copy PPT Prompt grays out until `latest` metrics exist; Run refresh disables while a refresh is in flight; Export Full Report goes through `exportFullReportToPdf` on the same `[data-aio-report-root]` element it always has).
+- `components/Dashboard.tsx` — now owns the `exportReport` and `copyPptPrompt` callbacks (lifted out of `ProjectHeader`). A single `useEffect` calls `setHeaderActions({...})` whenever the registered state changes and `clearHeaderActions()` on unmount, so the buttons appear/disappear cleanly across route changes.
+- `components/ProjectHeader.tsx` — props slimmed down (no more `onRefresh` / `refreshing` / `regionLabel` / `latestMetrics`). The component now only renders the input form + segment detector + the contextual Save changes CTA. Toasts for export/copy were removed at the same time — failures still log to the console; future work could add a global toast surface.
+
+### Notes
+- No data, API, or schema changes — this release is purely a UI relocation.
+- The PDF export still captures the entire dashboard panel container via `[data-aio-report-root="true"]`; the attribute is still set in `Dashboard.tsx`. Nothing about the per-section html2canvas snapshotting changed.
+- Hard-reload once after deploying so the browser fetches the new layout bundle — without the reload, the cached layout may still show the old "Projects" link with no buttons.
+
 ## [1.1.54] — 2026-05-23
 
 Progress bar now actually updates during a refresh — closes the last gap in v1.1.53's cache-bypass coverage.
