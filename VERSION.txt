@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.53
+version: 1.1.54
 released: 2026-05-23
-codename: three-layer-bypass
+codename: progress-bar-unfreeze
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.

@@ -268,7 +268,17 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
     const tick = async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/refresh/progress`, { cache: "no-store" });
+        // v1.1.54: append a millisecond timestamp so the URL itself is unique
+        // per poll. Mirrors the cache-bust pattern v1.1.53 applied to the
+        // QuickWinsPanel and KeywordExplorer fetches. Even though the server
+        // route now also returns `Cache-Control: no-store` and
+        // `revalidate = 0`, this client-side query-param makes the URL key
+        // distinct on every request — defense in depth against any future
+        // proxy / CDN that still tries to coalesce identical-URL polls.
+        const res = await fetch(
+          `/api/projects/${projectId}/refresh/progress?_=${Date.now()}`,
+          { cache: "no-store" },
+        );
         if (!res.ok || cancelled) return;
         const j = await res.json();
         if (cancelled) return;

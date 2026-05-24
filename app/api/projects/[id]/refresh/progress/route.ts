@@ -23,8 +23,38 @@ import { NextRequest, NextResponse } from "next/server";
 import { finalizeSnapshot, latestSnapshotAnyStatus, snapshotProgress } from "@/lib/db";
 
 export const runtime = "nodejs";
-// v1.1.52: removed v1.1.51's force-dynamic — see quick-wins for context.
-// Light read-only endpoint — default 10s is plenty.
+// v1.1.54: apply the same three-layer cache-bypass that v1.1.53 added to
+// quick-wins and keywords/detail. This route was missed in that pass and
+// was the root cause of the "progress bar stays black during a refresh"
+// symptom: the very first poll's response (status="running", done=0,
+// pct=0%) was being frozen by Vercel's data cache and served verbatim for
+// every subsequent poll, so the bar never updated visually even though the
+// snapshot was making real progress on the server. The final state still
+// surfaced correctly because the POST /refresh response (which carries the
+// "Snapshot saved — N AIO(s) detected" message) is a different cache key
+// — masking the polling-cache bug as "the bar just doesn't work."
+//
+// Three independent layers, mirroring quick-wins/route.ts:
+//   (a) `revalidate = 0`         — Next.js "always re-render" opt-out
+//   (b) `Cache-Control: no-store` — bypasses Vercel CDN regardless of (a)
+//   (c) client appends `?_=<ts>`  — unique URL key per poll (Dashboard.tsx)
+export const revalidate = 0;
+
+// v1.1.54: shared response builder so every exit path through this handler
+// — null-snapshot, normal progress, zombie auto-failed — carries the
+// no-store headers. Easy to forget on one branch otherwise. Mirrors the
+// `noStoreJson` helper in quick-wins/route.ts so future readers find the
+// same pattern in both places.
+function noStoreJson(body: any, init?: { status?: number }) {
+  return NextResponse.json(body, {
+    status: init?.status ?? 200,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "CDN-Cache-Control": "no-store",
+      "Vercel-CDN-Cache-Control": "no-store",
+    },
+  });
+}
 
 // v1.1.45: hard age cap on 'running' snapshots. Vercel function max is 60s
 // (Hobby) or 300s (Pro). A snapshot still in 'running' status 10+ minutes
@@ -36,7 +66,7 @@ const ZOMBIE_THRESHOLD_SEC = 600;
 
 export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   let snap = await latestSnapshotAnyStatus(ctx.params.id);
-  if (!snap) return NextResponse.json({ snapshot: null });
+  if (!snap) return noStoreJson({ snapshot: null });
 
   const { done, aios_so_far, failed_so_far } = await snapshotProgress(snap.id);
   const total = snap.keywords_count ?? 0;
@@ -64,7 +94,7 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
       // (latest-row by ran_at) and keeps the client from seeing 'running'
       // for one more poll cycle.
       const refreshed = await latestSnapshotAnyStatus(ctx.params.id);
-      if (!refreshed) return NextResponse.json({ snapshot: null });
+      if (!refreshed) return noStoreJson({ snapshot: null });
       snap = refreshed;
     } catch (e) {
       // Non-fatal — if the update fails (transient DB issue), we'll still
@@ -88,7 +118,7 @@ export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
     if (elapsed_sec > 300 && done > 0 && (done / elapsed_sec) < 0.05) stalled = true;
   }
 
-  return NextResponse.json({
+  return noStoreJson({
     snapshot: {
       id: snap.id,
       status: snap.status,

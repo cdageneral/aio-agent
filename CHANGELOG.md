@@ -4,6 +4,29 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.54] — 2026-05-23
+
+Progress bar now actually updates during a refresh — closes the last gap in v1.1.53's cache-bypass coverage.
+
+### Fixed
+- **Refresh progress bar updates live again.** After clicking Run refresh, the strip above the dashboard sections was rendering as just the dark background until the run completed — the bar wasn't visibly progressing from 0% → 100% the way it's supposed to. The completion banner (`Snapshot saved — N AIO(s) detected.`) still appeared correctly because that copy comes from the POST `/refresh` response, not from the polling endpoint. Symptom was masked as "the bar just doesn't work" instead of the underlying cache issue it actually was.
+
+### Root cause
+v1.1.51 added `dynamic = "force-dynamic"` to several read routes including `/api/projects/[id]/refresh/progress`. v1.1.52 reverted that because of the metrics regression. v1.1.53 replaced `force-dynamic` with the safer three-layer pattern (`revalidate = 0` + `Cache-Control: no-store` + client `?_=<timestamp>`) on `/quick-wins` and `/keywords/detail` — but the same pattern was never applied to `/refresh/progress`. So the polling endpoint silently went back to the v1.1.50 caching behavior: Vercel's data cache froze the very first response of the poll cycle (`status: "running", done: 0, pct: 0%`) and served that same frozen body for every subsequent 2.5s poll, so the bar stayed pinned at its initial state until the page re-rendered at completion. Same class of bug as the v1.1.51 ticket, different route.
+
+### How (same three-layer pattern, applied to refresh/progress)
+1. **`export const revalidate = 0`** added to `app/api/projects/[id]/refresh/progress/route.ts` — Next.js "always re-render" opt-out, the same code path that's working on `/quick-wins` and `/keywords/detail` in v1.1.53.
+2. **`noStoreJson()` helper** added to that route, mirroring the helper in `quick-wins/route.ts`. Every exit path through the GET handler — null-snapshot, normal progress, zombie auto-failed — now returns `Cache-Control: no-store, no-cache, must-revalidate, max-age=0` plus `CDN-Cache-Control: no-store` and `Vercel-CDN-Cache-Control: no-store`. Bypasses Vercel's edge cache regardless of what Next does upstream.
+3. **Client cache-bust** — `Dashboard.tsx` now appends `?_=<Date.now()>` to every poll. Each request hits a unique URL key, so even if (1) and (2) are somehow ignored the CDN has no key under which to coalesce stale responses.
+
+### Verification
+After deploying, click Run refresh on a project with a non-trivial keyword count. The progress strip should now visibly tick — percentage going up, processed count climbing, elapsed time growing, ETA shrinking — at a roughly 2.5s cadence (the poll interval). DevTools → Network → filter to `refresh/progress` should show one request every ~2.5s, each with a unique `_=...` query param and response headers `cache-control: no-store, no-cache, must-revalidate, max-age=0`. The "Refresh complete" green banner at the end is unchanged — that was already working.
+
+### Notes
+- No server-side behavior changed beyond response headers and the `revalidate` flag — payload shape is identical to v1.1.53.
+- `/api/projects/[id]/refresh` (the POST that actually does the work) was never affected by this issue — its response is what populates the completion banner. No changes to that route in this release.
+- If you see the bar still stuck after this deploy, hard-reload the browser once to evict the previous (cached) JS bundle so the new client-side cache-bust query param takes effect.
+
 ## [1.1.53] — 2026-05-23
 
 Cache-bypass take 3 — finally repopulates AIO Opportunities and Keyword Drilldown without re-breaking metrics.
