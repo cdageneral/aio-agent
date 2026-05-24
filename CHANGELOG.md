@@ -4,6 +4,31 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.53] — 2026-05-23
+
+Cache-bypass take 3 — finally repopulates AIO Opportunities and Keyword Drilldown without re-breaking metrics.
+
+### Fixed
+- **AIO Opportunities and Keyword Drilldown panels now actually populate.** Both panels were stuck rendering "No completed snapshot for this project yet. Run a refresh first." even when the executive summary on the same page (powered by `/api/projects/[id]/metrics`) showed a complete snapshot from minutes earlier. Root cause is the same one v1.1.51 identified: Vercel's data cache was freezing the first response from each route handler — including `{snapshot: null}` if the first hit happened before a snapshot existed. v1.1.51 fixed it with `export const dynamic = "force-dynamic"` but that broke `metrics`. v1.1.52 reverted that, restoring metrics but leaving the original bug.
+
+### How (three independent layers)
+This release uses three stacked cache-bypass mechanisms on `/quick-wins` and `/keywords/detail`, so no single Vercel/Next.js caching layer can freeze a null response again:
+1. **`export const revalidate = 0`** on each route — a different opt-out code path from `force-dynamic`. Marks the route as "always re-render" without triggering whatever bundling/initialization side effect made v1.1.51's flag break `latestSnapshot()` on the `metrics` route.
+2. **Explicit `Cache-Control: no-store, no-cache, must-revalidate` headers** (plus `CDN-Cache-Control: no-store` and `Vercel-CDN-Cache-Control: no-store`) on every response shape — success, no-snapshot, 404, and the 500 from the error handler. Bypasses Vercel's edge/CDN cache regardless of what Next.js does upstream. A small `noStoreJson()` helper at the top of each route ensures every exit path gets the headers — easy to forget on one branch otherwise.
+3. **Client-side timestamp cache-bust** — `QuickWinsPanel` and `KeywordExplorer` now append `&_=<Date.now()>` to every fetch. The URL itself is unique per request, so even if (1) and (2) are somehow ignored the CDN has no key under which to "freeze" a stale response.
+
+Any one of these is normally enough to fix the issue. Stacking them is defense in depth and costs essentially nothing.
+
+### Why this approach (and not the obvious one)
+The obvious fix is "just use `dynamic = 'force-dynamic'` again, like v1.1.51 did." We didn't, because v1.1.51 was the deploy where `latestSnapshot()` in the `metrics` handler started returning `null` for snapshots that `listSnapshots()` in the same handler was returning intact. We never fully explained that interaction, so re-applying `force-dynamic` would carry the same unknown risk. `revalidate = 0` is documented as an equivalent opt-out for cached route responses without that specific failure mode, and it's applied here only to the two routes that were actually broken — `metrics` is untouched.
+
+### Verification
+After deploying, the AIO Opportunities panel should populate on first load with the highest-priority gaps and Keyword Drilldown should show the per-keyword table for the latest snapshot. The empty-state diagnostic copy from v1.1.49/v1.1.50 still works as a fallback for the legitimate empty cases (no snapshot, region not crawled, all AIOs won). If you see an empty panel after this deploy, it now genuinely means one of those scenarios — not a cache problem.
+
+### Notes
+- `metrics` is intentionally not changed in this release. It was working in v1.1.52 and the changes here only touch `quick-wins` and `keywords/detail`. If `metrics` starts misbehaving again the cause is not this release.
+- Browser DevTools → Network tab is the fastest way to confirm the fix: a hit on `/api/projects/<id>/quick-wins?...&_=…` should return real `opportunities`/`diagnostics`, and the response headers should show `cache-control: no-store, no-cache, must-revalidate, max-age=0`.
+
 ## [1.1.52] — 2026-05-23
 
 Emergency revert of v1.1.51.

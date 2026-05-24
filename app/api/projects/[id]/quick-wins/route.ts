@@ -19,10 +19,34 @@ import { getProject, latestSnapshot, listCompetitors } from "@/lib/db";
 import { domainMatches } from "@/lib/domain";
 
 export const runtime = "nodejs";
-// v1.1.52: removed v1.1.51's `export const dynamic = "force-dynamic"`. It
-// broke the metrics endpoint in production (latest snapshot returned null
-// even though listSnapshots showed the snapshots exist). The cache-bypass
-// problem v1.1.51 was trying to fix needs a different solution.
+// v1.1.53: cache-bypass take 3. v1.1.51 used `dynamic = "force-dynamic"`
+// which broke metrics in a way we never explained. v1.1.52 reverted that
+// and the panels went empty again. This release uses three independent
+// layers instead, so no single Vercel/Next.js cache mechanism can freeze
+// a null response:
+//   (a) `revalidate = 0` — Next's "always re-render" opt-out, different
+//       code path from force-dynamic. Safe to use on metrics-style routes.
+//   (b) explicit `Cache-Control: no-store` headers on every response —
+//       bypasses the Vercel CDN edge cache regardless of what Next does.
+//   (c) client appends `?_=<timestamp>` on every fetch — guarantees a fresh
+//       URL key even if (a) and (b) are somehow ignored.
+// Any one of these is normally enough; stacking all three is defense in
+// depth and costs nothing.
+export const revalidate = 0;
+
+// v1.1.53: shared response builder so every exit path through this handler
+// — success, "no snapshot", error 500 — carries the no-store headers. Easy
+// to forget on one branch otherwise.
+function noStoreJson(body: any, init?: { status?: number }) {
+  return NextResponse.json(body, {
+    status: init?.status ?? 200,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "CDN-Cache-Control": "no-store",
+      "Vercel-CDN-Cache-Control": "no-store",
+    },
+  });
+}
 
 interface QuickWin {
   keyword: string;
@@ -47,7 +71,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     // to `{ }` (no opportunities, no diagnostics) and the panel rendered the
     // "No completed snapshot" branch even though the snapshot existed.
     console.error("[/api/projects/[id]/quick-wins] failed:", err);
-    return NextResponse.json(
+    return noStoreJson(
       { error: err?.message ?? String(err ?? "quick-wins computation failed") },
       { status: 500 },
     );
@@ -56,11 +80,11 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
 
 async function handleGet(req: NextRequest, ctx: { params: { id: string } }) {
   const project = await getProject(ctx.params.id);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+  if (!project) return noStoreJson({ error: "project not found" }, { status: 404 });
 
   const snap = await latestSnapshot(project.id);
   if (!snap) {
-    return NextResponse.json({
+    return noStoreJson({
       snapshot: null,
       opportunities: [],
       // v1.1.49: diagnostic block surfaces enough state for the UI's empty
@@ -177,7 +201,7 @@ async function handleGet(req: NextRequest, ctx: { params: { id: string } }) {
     return acc + (c.some((x) => domainMatches(x.domain, project.client_domain)) ? 1 : 0);
   }, 0);
 
-  return NextResponse.json({
+  return noStoreJson({
     snapshot: snap,
     opportunities: opportunities.slice(0, limit),
     total_opportunities: opportunities.length,

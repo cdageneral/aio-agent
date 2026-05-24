@@ -74,6 +74,12 @@ export default function QuickWinsPanel({
     setServerError(null);
     const params = new URLSearchParams({ region: regionsForMode(region).join(","), limit: "60" });
     if (kindFilter !== "all") params.set("kind", kindFilter);
+    // v1.1.53: append a unique timestamp to defeat Vercel's data cache. Even
+    // with the server-side `revalidate=0` + `Cache-Control: no-store` headers
+    // we just added, the safest belt-and-braces is to make the URL itself
+    // unique per request — there is no key for the CDN/runtime to "freeze
+    // a null response under" anymore. Costs one trivial extra query param.
+    params.set("_", Date.now().toString());
     try {
       const res = await fetch(`/api/projects/${projectId}/quick-wins?${params.toString()}`, { cache: "no-store" });
       let j: any = null;

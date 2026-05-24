@@ -15,16 +15,34 @@ import { getProject, latestSnapshot, listCompetitors } from "@/lib/db";
 import { domainMatches } from "@/lib/domain";
 
 export const runtime = "nodejs";
-// v1.1.52: removed v1.1.51's force-dynamic — see quick-wins route for
-// rationale. Needs a different cache-bypass approach.
+// v1.1.53: three-layer cache bypass — see quick-wins route for the full
+// reasoning. `revalidate = 0` + per-response `Cache-Control: no-store`
+// + client-side `?_=<timestamp>`. This finally addresses the "metrics
+// works but drilldown is frozen at null" pattern without re-triggering
+// v1.1.51's force-dynamic regression on metrics.
+export const revalidate = 0;
+
+// v1.1.53: helper that stamps no-store headers on every response shape this
+// handler can emit (success, no-snapshot, 404). Keeps the cache bypass
+// uniform across exit paths.
+function noStoreJson(body: any, init?: { status?: number }) {
+  return NextResponse.json(body, {
+    status: init?.status ?? 200,
+    headers: {
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "CDN-Cache-Control": "no-store",
+      "Vercel-CDN-Cache-Control": "no-store",
+    },
+  });
+}
 
 export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   const project = await getProject(ctx.params.id);
-  if (!project) return NextResponse.json({ error: "project not found" }, { status: 404 });
+  if (!project) return noStoreJson({ error: "project not found" }, { status: 404 });
 
   const snap = await latestSnapshot(project.id);
   if (!snap) {
-    return NextResponse.json({ snapshot: null, keywords: [], brands: [] });
+    return noStoreJson({ snapshot: null, keywords: [], brands: [] });
   }
 
   const url = new URL(req.url);
@@ -129,7 +147,7 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
     };
   });
 
-  return NextResponse.json({
+  return noStoreJson({
     snapshot: snap,
     project_brand: project.brand_name,
     tracked,

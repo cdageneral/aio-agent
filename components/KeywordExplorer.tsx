@@ -83,6 +83,12 @@ export default function KeywordExplorer({
     setLoading(true);
     const params = new URLSearchParams({ region: regionsForMode(region).join(",") });
     if (kindFilter !== "all") params.set("kind", kindFilter);
+    // v1.1.53: timestamp to defeat Vercel's data cache. See quick-wins/route.ts
+    // for the full rationale — the three-layer (revalidate=0 +
+    // Cache-Control no-store + unique URL key) bypass is what finally
+    // unsticks the "frozen-at-null" pattern that emptied this panel after
+    // v1.1.52 reverted force-dynamic.
+    params.set("_", Date.now().toString());
     const res = await fetch(`/api/projects/${projectId}/keywords/detail?${params.toString()}`, { cache: "no-store" });
     const j = await res.json();
     setData({ keywords: j.keywords ?? [], tracked: j.tracked ?? [] });
