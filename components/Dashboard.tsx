@@ -153,21 +153,15 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     }
   }
 
-  /** Push the LLM-suggested seed keywords into the keyword universe right
-   *  away as `manual` source so the user lands on a populated panel. */
-  async function applySeedKeywords(seeds: string[]) {
-    if (!seeds.length) return;
-    const res = await fetch(`/api/projects/${projectId}/keywords`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ method: "manual", keywords: seeds }),
-    });
-    if (res.ok) {
-      const j = await res.json();
-      setRefreshMsg(`Universe seeded — ${j.added} keyword(s) added. Click Run refresh to fetch AIOs.`);
-      await load();
-    }
-  }
+  // v1.1.66: applySeedKeywords() previously lived here — it was the
+  // callback wired into ProjectHeader.onSeedKeywordsApplied so the
+  // SmartSegmentDetector could push its LLM-suggested seed keywords
+  // into the keyword universe in one click. With the detector removed,
+  // no caller remains, so the helper was deleted. The keyword universe
+  // is now populated via the KeywordPanel's manual / CSV-import paths
+  // (POST /api/projects/{id}/keywords still works the same way the
+  // helper used to call it — re-adding this is a ~10-line restore from
+  // git history if the detector is ever brought back).
 
   useEffect(() => { load(); }, [load]);
 
@@ -538,20 +532,19 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-8" data-aio-report-root="true">
+      {/* v1.1.66: ProjectHeader no longer hosts the SmartSegmentDetector, so
+          the onCompetitorsSuggested + onSeedKeywordsApplied callbacks are
+          no longer wired through it. The persistSuggestions() helper and
+          the suggestedCompetitors state stay here — the CompetitorPanel
+          still consumes `suggested` (so any prior detector-generated
+          suggestions persisted in project.suggested_competitors continue
+          to render), and a future re-enable of the detector can re-wire
+          a callback that calls persistSuggestions() directly. */}
       <ProjectHeader
         project={project}
         onSaved={load}
         region={region}
         onRegionChange={setRegion}
-        onCompetitorsSuggested={(c) => {
-          // De-dupe against currently tracked competitors AND the existing suggestion list.
-          const trackedDomains = new Set<string>(competitors.map((x: any) => (x.domain ?? "").toLowerCase()));
-          const existingDomains = new Set(suggestedCompetitors.map((x) => x.domain.toLowerCase()));
-          const fresh = c.filter((x) => x.domain && !trackedDomains.has(x.domain.toLowerCase()) && !existingDomains.has(x.domain.toLowerCase()));
-          if (fresh.length === 0) return;
-          persistSuggestions([...suggestedCompetitors, ...fresh]);
-        }}
-        onSeedKeywordsApplied={applySeedKeywords}
       />
 
       {/* v1.1.37: live refresh progress. Shown whenever we have a polled
