@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.59] — 2026-05-24
+
+Dashboard layout — removed the Share of Voice donut panel and promoted the Brand comparison table into its slot. Motivation: the donut's "share of voice" denominator (CHIP's citations ÷ every citation slot across every AIO, including non-brand sources like government sites and news outlets) was easy to confuse with the executive-summary "Your position" metric, which uses a head-to-head denominator. The two numbers diverged dramatically in real screenshots (e.g. 15.0% vs 79.7%) and stakeholders kept asking why. The Brand comparison table communicates the same competitive context — who's cited, how often, in what position — in a directly readable form without the denominator ambiguity.
+
+### Changed
+- **`components/Dashboard.tsx`** — removed the `ShareOfVoiceHero` import and the JSX block that rendered it (the cluster-filtered IIFE between StoryPanel and What changed). The Brand comparison `<section>` that previously lived at the bottom of the page (just before "Other domains in AIOs") was moved up to occupy that slot. Order is now: ProjectHeader → progress/banners → CompetitorPanel + KeywordPanel → FirstRefreshBanner → StoryPanel → **Brand comparison** → What changed → AIO trends → Topic clusters → AIO Opportunities → Keyword drilldown → Other domains in AIOs.
+
+### Not changed
+- **`ShareOfVoiceHero.tsx` is kept on disk.** The component file is untouched in case we want to bring it back behind a feature toggle or surface it on a separate "deep dive" route. It is simply no longer imported.
+- **`lib/metrics.ts` `share_of_voice` field** is still computed and emitted in the metrics payload. It's consumed by `lib/export.ts` for the PPT-prompt summary, which the user copies into a separate slide-generation workflow — pulling the metric out of the on-screen layout doesn't change what's useful in that downstream prompt.
+- **No API changes.** Nothing in `/api/projects/[id]/metrics` was touched, so existing snapshots render correctly and no migration is needed.
+
+### Notes
+- Hard-reload after deploy so the browser picks up the new client bundle — without it the user may still see the old donut briefly until Next.js revalidates the page chunk.
+- If you later want to expose the donut behind a toggle, the import comment at the top of `Dashboard.tsx` flags exactly where to reintroduce it.
+
 ## [1.1.58] — 2026-05-25
 
 Hotfix — v1.1.57 broke the Vercel build because the `BrandMetrics` interface lost its closing brace during the `avg_citation_position` edit. Vercel surfaced this as `Command "npm run build" exited with 1`; the underlying SWC parser error was `Expected '{', got 'interface'` at `lib/metrics.ts:53` (the next interface after BrandMetrics was being read as if it were still inside BrandMetrics). One-line fix; the feature itself was correct.

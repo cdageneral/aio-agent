@@ -8,7 +8,13 @@ import AcquisitionChart from "./AcquisitionChart";
 import PeriodSelector from "./PeriodSelector";
 import RegionSelector, { RegionMode, regionsForMode } from "./RegionSelector";
 import StoryPanel from "./StoryPanel";
-import ShareOfVoiceHero from "./ShareOfVoiceHero";
+// v1.1.59: ShareOfVoiceHero (donut) removed from the dashboard layout per
+// product decision — the metric was confusing alongside "Your position"
+// because they share branding ("share of voice") but use different
+// denominators. The Brand comparison table now occupies that slot, giving
+// the same competitive context in a more directly readable form. The
+// ShareOfVoiceHero component file is kept on disk in case we want to bring
+// it back behind a toggle, but it is no longer imported here.
 import FirstRefreshBanner from "./FirstRefreshBanner";
 import { DateRange, DEFAULT_RANGE, filterByDateRange } from "./chartUtils";
 import type { SuggestedCompetitor } from "./SmartSegmentDetector";
@@ -629,28 +635,15 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         onKindFilterChange={setKindFilter}
       />
 
-      {latest && latest.share_of_voice && latest.total_citation_slots > 0 && (() => {
-        // When a cluster filter is active, scope the donut + legend to that
-        // cluster's slices/AIO count. Otherwise show the global view.
-        const cluster = clusterFilter !== "all"
-          ? (latest.clusters ?? []).find((c: any) => c.name === clusterFilter)
-          : null;
-        const slices = cluster ? cluster.share_of_voice : latest.share_of_voice;
-        const totalSlots = cluster ? cluster.total_citation_slots : latest.total_citation_slots;
-        const totalAios = cluster ? cluster.aio_count : latest.total_aios_triggered;
-        if (!slices || slices.length === 0 || totalSlots === 0) return null;
-        return (
-          <ShareOfVoiceHero
-            slices={slices}
-            totalSlots={totalSlots}
-            totalAios={totalAios}
-            clientLabel={project.brand_name}
-            growth={growth?.brands}
-            clusterName={cluster ? cluster.name : null}
-            onClearCluster={cluster ? () => setClusterFilter("all") : undefined}
-          />
-        );
-      })()}
+      {/* v1.1.59: Brand comparison promoted to this slot (previously held by
+          ShareOfVoiceHero). Sits directly after StoryPanel so the user reads
+          the executive KPIs and then immediately sees the competitor table
+          that explains those numbers. The original Brand comparison block
+          at the bottom of the page has been removed to avoid duplication. */}
+      <section className="surface p-5">
+        <h2 className="h2 mb-3">Brand comparison</h2>
+        <CompetitorTable latest={latest} />
+      </section>
 
       <section className="surface p-5">
         <div className="flex items-baseline justify-between mb-3">
@@ -818,10 +811,8 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         />
       </section>
 
-      <section className="surface p-5">
-        <h2 className="h2 mb-3">Brand comparison</h2>
-        <CompetitorTable latest={latest} />
-      </section>
+      {/* v1.1.59: Brand comparison section relocated above (just after
+          StoryPanel) — see the comment on that block. It used to sit here. */}
 
       <section className="surface p-5" id="section-other-domains">
         <h2 className="h2 mb-3">Other domains in AIOs</h2>

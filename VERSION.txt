@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.55
-released: 2026-05-23
-codename: header-action-relocation
+version: 1.1.59
+released: 2026-05-24
+codename: brand-comparison-promoted
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.
