@@ -4,6 +4,22 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.61] — 2026-05-24
+
+Citation rate now populated for other-domain rows. Previously only tracked-brand rows in the Citation landscape's "All" tab and in the standalone "Other domains" tab showed a citation_rate value; other domains (Wikipedia, Reddit, news, industry sites, etc.) rendered an em-dash in the rate column because `latest.other_domains[]` doesn't carry a precomputed rate field. User reported this as a gap — comparing brand vs. non-brand sources at a glance was harder than it needed to be when half the column was empty. Fix: derive the rate per other-domain row using the SAME formula and SAME denominator that `lib/metrics.ts` uses to compute the brand `citation_rate` field, so the values are directly comparable.
+
+### Changed
+- **`components/CitationLandscape.tsx`** — the unified-row builder for the "All" tab now sets `citation_rate` on other-domain rows as `o.count / latest.total_aios_triggered`. This mirrors the brand formula in `lib/metrics.ts:211` (`aios_acquired / total_aios_triggered`), so a 35% rate on `en.wikipedia.org` means the same thing as a 35% rate on a tracked brand — cited in 35% of all AIOs triggered in the current region/kind scope. The JSX no longer branches on `row.origin === "brand"`; it just renders `citation_rate` when defined and falls back to "—" only when total AIOs in scope is zero (otherwise the math would emit `Infinity`).
+- **`components/OtherDomainsTabs.tsx`** — added the same rate computation as a helper `rateFor(count)` and surfaced it under the AIO count in both the "Top 10" and "Full list" tabs. The right-hand cell now stacks count on top and rate underneath in the muted text style. The "By source type" tab is unchanged — it already shows aggregated citation counts per category which don't need a per-row rate.
+
+### Not changed
+- **No data, API, or metrics changes.** Both the brand and other-domain rates derive from fields already on the metrics payload (`brands[].citation_rate` and `other_domains[].count` + `total_aios_triggered`). The metrics pipeline in `lib/metrics.ts` is untouched, so no migration is needed and historical snapshots still render correctly.
+- **`CompetitorTable.tsx`** is unchanged — it already had a rate column for every brand row.
+
+### Notes
+- Per user preference: this rate is computed from the SAME real data the brand rate is computed from — it's not modeled, simulated, or estimated. The formula and denominator are byte-identical to what `lib/metrics.ts` does for brands; the only reason the rate wasn't there before is that the metrics pipeline never pre-computed it for other-domain rows. The component derives it on-render.
+- Hard-reload after deploy so the browser picks up the new client bundle.
+
 ## [1.1.60] — 2026-05-24
 
 Dashboard layout — the standalone "Brand comparison" and bottom-of-page "Other domains in AIOs" sections are merged into a single tabbed surface called **Citation landscape**. Motivation: the two sections answered the same underlying question ("who's cited in our AIOs?") but split the answer across two scroll positions on the page — Brand comparison sat directly under StoryPanel, Other domains lived all the way at the bottom — so users had to flip back and forth to compare tracked-brand performance against the wider web. The merged panel keeps both views available behind tabs and adds a new combined ranking so users can see the whole landscape at once without leaving the slot where they already expect to find the competitive context.

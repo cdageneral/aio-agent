@@ -67,7 +67,14 @@ interface UnifiedRow {
   // Same denominator (number of AIOs the entity appears in), so ranking by
   // this field is apples-to-apples.
   count: number;
-  // Brand-only enrichments — undefined for other-domain rows.
+  // v1.1.61: citation_rate is now populated for BOTH brand rows AND
+  // other-domain rows. Brands carry the metric directly off the payload
+  // (`latest.brands[].citation_rate`). Other-domain rows are computed here
+  // as `count / latest.total_aios_triggered` — the SAME formula and the
+  // SAME denominator metrics.ts uses for the brand `citation_rate` field
+  // (see metrics.ts line 211). So a 35% rate on `en.wikipedia.org` means
+  // exactly what 35% on a tracked brand means: cited in 35% of all AIOs
+  // triggered in the current scope.
   is_client?: boolean;
   citation_rate?: number;
   source_type?: string;
@@ -93,6 +100,13 @@ export default function CitationLandscape({ latest }: { latest: any }) {
 
   const unified: UnifiedRow[] = useMemo(() => {
     if (!latest) return [];
+    // v1.1.61: pull the AIO-universe denominator off the metrics payload
+    // (computed in lib/metrics.ts as `aioSerps.length` — the count of
+    // distinct AIOs triggered in the current region/kind scope). This is
+    // the SAME number the brand `citation_rate` field divides by, so a rate
+    // computed against it for an other-domain row is directly comparable to
+    // a brand's rate. Guard against zero so we don't emit `Infinity`.
+    const totalAios: number = latest.total_aios_triggered ?? 0;
     const brands: UnifiedRow[] = (latest.brands ?? []).map((b: any) => ({
       key: `b:${b.domain}`,
       display_name: b.brand_name,
@@ -108,6 +122,10 @@ export default function CitationLandscape({ latest }: { latest: any }) {
       domain: o.domain,
       origin: "other",
       count: o.count ?? 0,
+      // Same formula metrics.ts uses for brands: count / total_aios_triggered.
+      // `undefined` if we can't compute it (no AIOs in scope) so the JSX
+      // can still fall back to a dash.
+      citation_rate: totalAios > 0 ? (o.count ?? 0) / totalAios : undefined,
       source_type: o.source_type,
     }));
     return [...brands, ...others].sort((a, b) => b.count - a.count);
@@ -266,7 +284,13 @@ export default function CitationLandscape({ latest }: { latest: any }) {
                       </td>
                       <td className="py-3 pr-3 text-right font-semibold">{row.count}</td>
                       <td className="py-3 pr-3 text-right">
-                        {row.origin === "brand" ? pct(row.citation_rate ?? NaN) : <span className="muted">—</span>}
+                        {/* v1.1.61: both brand AND other-domain rows now show
+                            a citation rate. Brands use the value off the
+                            payload; other domains use count / total_aios_-
+                            triggered, computed in the unified-row builder
+                            above. Fallback to "—" only when total_aios is
+                            zero (no AIOs in scope, can't divide). */}
+                        {row.citation_rate !== undefined ? pct(row.citation_rate) : <span className="muted">—</span>}
                       </td>
                     </tr>
                   ))}

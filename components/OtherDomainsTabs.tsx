@@ -11,6 +11,15 @@ export default function OtherDomainsTabs({ latest }: { latest: any }) {
 
   const others: { domain: string; count: number; source_type: string }[] = latest?.other_domains ?? [];
   const breakdown: Record<string, number> = latest?.source_type_breakdown ?? {};
+  // v1.1.61: AIO-universe denominator from the metrics payload — same field
+  // and same definition the brand `citation_rate` uses (count of distinct
+  // AIOs triggered in the current region/kind scope). With this we can
+  // surface a citation rate for each other-domain row that's directly
+  // comparable to a tracked brand's rate. Guarded against zero so we don't
+  // emit `Infinity` on a snapshot with no AIOs yet.
+  const totalAios: number = latest?.total_aios_triggered ?? 0;
+  const rateFor = (count: number): string =>
+    totalAios > 0 ? `${((count / totalAios) * 100).toFixed(1)}%` : "—";
 
   const filtered = useMemo(() => {
     if (filterType === "all") return others;
@@ -53,7 +62,13 @@ export default function OtherDomainsTabs({ latest }: { latest: any }) {
                 <div className="font-medium">{o.domain}</div>
                 <div className="text-xs muted">{o.source_type}</div>
               </div>
-              <div className="text-sm">{o.count} AIO{o.count === 1 ? "" : "s"}</div>
+              {/* v1.1.61: surface the citation rate next to the raw AIO count
+                  so this row is directly comparable to a tracked brand's row
+                  in the "Tracked brands" tab. Same formula, same denominator. */}
+              <div className="text-sm" style={{ textAlign: "right" }}>
+                <div>{o.count} AIO{o.count === 1 ? "" : "s"}</div>
+                <div className="text-xs muted">{rateFor(o.count)}</div>
+              </div>
             </li>
           ))}
         </ul>
@@ -75,7 +90,11 @@ export default function OtherDomainsTabs({ latest }: { latest: any }) {
                   <div className="font-medium">{o.domain}</div>
                   <div className="text-xs muted">{o.source_type}</div>
                 </div>
-                <div className="text-sm">{o.count}</div>
+                {/* v1.1.61: stacked count + rate, matching the Top 10 tab. */}
+                <div className="text-sm" style={{ textAlign: "right" }}>
+                  <div>{o.count}</div>
+                  <div className="text-xs muted">{rateFor(o.count)}</div>
+                </div>
               </li>
             ))}
           </ul>
