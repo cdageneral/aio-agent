@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.64
+version: 1.1.65
 released: 2026-05-25
-codename: chunked-refresh
+codename: drop-empty-footprint-column
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.

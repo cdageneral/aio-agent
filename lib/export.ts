@@ -410,8 +410,13 @@ interface PptPromptLatest {
     citation_slots?: number;
     citation_rate?: number;
     /** v1.1.63: organic-footprint citation rate — citations / AIOs the
-     *  brand actually ranked organically for. Same definition the
-     *  CompetitorTable's "Citation rate (footprint)" column uses. */
+     *  brand actually ranked organically for. v1.1.65: no longer consumed
+     *  by the prompt builder (the slide-1 brand comparison column was
+     *  dropped because real-world refresh data renders it as 0.0% for
+     *  every brand — the refresh pipeline doesn't yet capture organic
+     *  position alongside AIO citations). Field is kept on the type so
+     *  the slide can be re-added in one JSX line once the refresh
+     *  pipeline starts populating it. */
     citation_rate_organic?: number;
     mention_count?: number;
     mention_rate?: number;
@@ -629,7 +634,7 @@ export function buildPptPrompt(
           `${(i + 1).toString().padStart(2, " ")}. ${b.brand_name}${isClient ? " (YOU)" : ""}${tag}`,
           `    domain: ${b.domain ?? "—"}`,
           `    AIOs acquired: ${intFmt(b.aios_acquired)}  ·  citation slots: ${intFmt(b.citation_slots)}`,
-          `    citation rate (market): ${pct(b.citation_rate ?? 0)}  ·  citation rate (footprint): ${pct(b.citation_rate_organic ?? 0)}  ·  mention rate: ${pct(b.mention_rate ?? 0)}`,
+          `    citation rate (brands): ${pct(b.citation_rate ?? 0)}  ·  mention rate: ${pct(b.mention_rate ?? 0)}`,
         ].join("\n");
       }).join("\n");
 
@@ -856,14 +861,14 @@ ${metricKpiLines}
 ROW 3 — "TRACKED BRAND COMPARISON" table, directly below the metric strip:
   - Section eyebrow (small uppercase, deck's primary accent color): "TRACKED BRAND COMPARISON"
   - Section title: "How ${brand} stacks up against tracked competitors"
-  - One row per tracked brand (client + every competitor), sorted by citation rate market desc.
-  - Table columns (left → right): BRAND · DOMAIN · AIOS ACQUIRED · CITATION SLOTS · CITATION RATE (MARKET) · CITATION RATE (FOOTPRINT) · MENTION RATE
-  - Column alignment: BRAND + DOMAIN left-aligned; the four numeric columns right-aligned; bold the CITATION RATE (MARKET) cell on every row since that's the column the deck's executive reader anchors on.
+  - One row per tracked brand (client + every competitor), sorted by citation rate (brands) desc.
+  - Table columns (left → right): BRAND · DOMAIN · AIOS ACQUIRED · CITATION SLOTS · CITATION RATE (BRANDS) · BRAND MENTION RATE
+  - Column alignment: BRAND + DOMAIN left-aligned; the three numeric columns right-aligned; bold the CITATION RATE (BRANDS) cell on every row since that's the column the deck's executive reader anchors on.
   - Header row styling: small uppercase, muted, thin underline.
   - Highlight the client row by tinting its background with the deck's primary accent (matches the dashboard's CompetitorTable client-row treatment) and append a small "client" pill next to the brand name.
   - Row data (in this exact order, do NOT recalculate):
 ${brandTableLines}
-  - Footer note (small, muted) under the table: "Citation rate (market) = brand's share of every AIO triggered. Citation rate (footprint) = brand's share of AIOs they actually ranked organically for. Mention rate = AIOs where the brand name appears in the answer text, cited or not."
+  - Footer note (small, muted) under the table: "Citation rate (brands) = brand's share of every AIO triggered. Brand mention rate = AIOs where the brand name appears in the answer text, cited or not."
 
 FOOTER on slide: "Source: ${brand} AIO crawl, ${ctx.universe_label ? ctx.universe_label + " " : ""}keyword universe (${intFmt(totalKw)} queries), ${stampHuman}. Citation slots = distinct domains cited per AIO, summed across all ${intFmt(totalAios)} AIOs."
 

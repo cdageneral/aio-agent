@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.65] — 2026-05-25
+
+"Citation rate (footprint)" column removed from both the dashboard's Tracked brands table and slide 1 of the PPT prompt. In real-world refresh data the column rendered as 0.0% for every tracked brand — the underlying `citation_rate_organic` metric is defined as "citations / AIOs the brand actually ranked organically for", but the refresh pipeline currently doesn't capture per-brand organic position alongside AIO citations, so the per-brand `total_aios_triggered_organic` denominator stays at 0 for every brand and the rate divides out to zero. Stakeholders kept asking what the empty column meant; cleaner to drop it until the refresh-side organic-capture feature lands. The "Citation rate (market)" column is also renamed to "Citation rate (brands)" to match the label the user prefers — it always referenced the brand-vs-brand share of triggered AIOs, but the (market) suffix only made sense when contrasted with a (footprint) column right next to it.
+
+### Changed
+- **`components/CompetitorTable.tsx`** — dropped the "Citation rate (footprint)" `<th>` and the matching `<td>{pct(b.citation_rate_organic)}</td>` cell. Renamed "Citation rate (market)" → "Citation rate (brands)". Table now renders 6 columns instead of 7: Brand · Domain · AIOs acquired · Citation slots · Citation rate (brands) · Mention rate. Client row highlight (`--accent-blue-soft` background + "client" pill) is unchanged.
+- **`lib/export.ts`** — slide-1 brand comparison block in `buildPptPrompt` dropped the footprint column from both the data rows and the header line. Footer note rewritten — used to define both "market" and "footprint" rates, now just defines "brands" and "mention". Slide-1 ROW 3 now spec's 6 columns matching the dashboard. The `PptPromptLatest.brands[].citation_rate_organic` field is KEPT on the type (with an updated JSDoc explaining why) so re-adding the column once the refresh pipeline starts populating organic position is a one-line JSX change.
+
+### Not changed
+- **`lib/metrics.ts`** untouched. The metrics pipeline still computes `citation_rate_organic` for every brand and emits it on the payload — only the two consumers (CompetitorTable and the PPT prompt) stopped rendering it. Historical snapshots keep working; no schema migration; no API contract change.
+- **`components/KpiCards.tsx`** — has a dead reference to `citation_rate_organic` ("`{pct(client?.citation_rate_organic)} on footprint`") on line 66, but the component is not imported anywhere in the current Dashboard layout (grep confirms zero callers). Left as-is so it doesn't need touching this release.
+- **`PptPromptLatest.brands[]` type** still carries the optional `citation_rate_organic` field. Just unused by the prompt builder now.
+- All other dashboard panels, the chunked refresh (v1.1.64), the 3-slide PPT prompt (v1.1.62), and the slide-3 keyword/AIO drilldown are unchanged.
+
+### Notes
+- Per user preference: this column was real metric data (not modeled), but it was uniformly 0% in the actual refresh data and was visual noise. Removed at user request after they observed the empty column on the live dashboard.
+- Hard-reload after deploy so the browser picks up the new client bundle.
+
 ## [1.1.64] — 2026-05-25
 
 Refresh is now CHUNKED so universes past ~400 keywords stop 504-ing on Vercel. Symptom user reported: "Refresh failed — Server returned 504" on a 389-keyword Canada-only universe (and the universe is going to grow past 600 soon). Root cause: Vercel's per-function execution cap is 300 seconds on Pro plans, and the old refresh route did all the SerpAPI fetches + DB writes inside a single HTTP request. At ~3 seconds per SerpAPI call ÷ concurrency 4, the math hits ~450s for 600 keywords — which means the function dies mid-run, the edge proxy returns a 504, and the snapshot is left in a zombie 'running' state until the polling endpoint's auto-fail kicks in. Fix: split the work across multiple POSTs, each one processing a 200-task slice (well under the 300s cap), with the client orchestrating the chunks sequentially and the existing /refresh/progress polling continuing to drive the progress widget unchanged.
