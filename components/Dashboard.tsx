@@ -212,26 +212,66 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           console.warn("[onRefresh] failed to persist region change:", j);
         }
       }
-      const res = await fetch(`/api/projects/${projectId}/refresh`, { method: "POST" });
-      // v1.1.48: parse the response defensively. A common server-side failure
-      // mode (function crash, Vercel timeout returning HTML, missing API key
-      // returning a 500 page, etc.) is for the response to NOT be valid JSON.
-      // Without this guard, `await res.json()` would throw a "Unexpected
-      // token < in JSON" error that gets swallowed into a useless "Refresh
-      // failed" string instead of surfacing the actual HTTP failure.
-      let j: any = null;
-      try {
-        j = await res.json();
-      } catch {
-        const body = await res.text().catch(() => "");
-        throw new Error(
-          res.ok
-            ? "Refresh returned unparseable response"
-            : `Server returned ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+      // v1.1.64: the refresh endpoint is now CHUNKED. We POST it once with
+      // no params to start chunk 0 (which also creates the snapshot row),
+      // read total_chunks from the response, then loop the remaining
+      // chunks sequentially. This keeps each function invocation comfortably
+      // under Vercel's 300s Pro cap — for 600+ keyword universes the
+      // old single-call refresh used to 504 once total wall-clock time
+      // crossed 300s. Polling /refresh/progress continues to drive the live
+      // progress widget unchanged because the polling endpoint counts
+      // serp_results rows, which tick up across all chunks since each chunk
+      // appends to the same snapshot.
+
+      // Helper: POST one chunk and return parsed body. Wrapped so the
+      // defensive parsing (handles HTML error pages, Vercel timeouts, etc.)
+      // applies to every chunk POST, not just the first.
+      const postChunk = async (params: string): Promise<any> => {
+        const res = await fetch(
+          `/api/projects/${projectId}/refresh${params ? `?${params}` : ""}`,
+          { method: "POST" },
+        );
+        let parsed: any = null;
+        try {
+          parsed = await res.json();
+        } catch {
+          const body = await res.text().catch(() => "");
+          throw new Error(
+            res.ok
+              ? "Refresh returned unparseable response"
+              : `Server returned ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
+          );
+        }
+        if (!res.ok) throw new Error(parsed?.error ?? `Refresh failed (${res.status})`);
+        return parsed;
+      };
+
+      // Chunk 0 — server creates snapshot and processes the first slice.
+      let chunkResp = await postChunk("");
+      const snapshotIdLocal: string = chunkResp.snapshot_id;
+      const totalChunks: number = chunkResp.total_chunks ?? 1;
+
+      // Subsequent chunks — sequential. The /refresh/progress polling loop
+      // (separate effect below) will keep the user's progress widget alive
+      // throughout. We don't need a per-chunk UI update because the widget
+      // shows live "done of total" anyway; we just keep firing chunks until
+      // is_final.
+      for (let n = 1; n < totalChunks; n++) {
+        if (chunkResp.is_final) break;
+        chunkResp = await postChunk(
+          `snapshotId=${encodeURIComponent(snapshotIdLocal)}&chunk=${n}`,
         );
       }
-      if (!res.ok) throw new Error(j?.error ?? `Refresh failed (${res.status})`);
-      setRefreshMsg(`Snapshot saved — ${j.aios_triggered} AIO(s) detected${j.failed ? `, ${j.failed} errored` : ""}.`);
+
+      // Final response carries the cumulative totals (server pulls them
+      // from snapshotProgress() before responding, so they match what the
+      // /metrics endpoint will return once we re-load).
+      const totalAios = chunkResp.aios_triggered ?? chunkResp.cumulative_aios ?? 0;
+      const totalFailed = chunkResp.failed ?? chunkResp.cumulative_failed ?? 0;
+      setRefreshMsg(
+        `Snapshot saved — ${totalAios} AIO(s) detected${totalFailed ? `, ${totalFailed} errored` : ""}` +
+          (totalChunks > 1 ? ` · processed in ${totalChunks} chunks to avoid Vercel's 300s function cap` : "."),
+      );
       await load();
       // v1.1.15: nudge child panels (Quick Wins, Drilldown) so they refetch
       // their own data with the new snapshot rather than show stale state.
