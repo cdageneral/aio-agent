@@ -66,6 +66,7 @@ export interface BrandMetrics {
    *  Same semantics as the per-keyword drilldown's `brand_hits[].position`.
    *  Null when the brand has zero acquired AIOs (avg is undefined). */
   avg_citation_position: number | null;
+}
 
 export interface SovSlice {
   label: string;            // brand name OR "Wikipedia" / "Reddit" / "News" / "Other"

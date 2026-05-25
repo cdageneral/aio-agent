@@ -4,6 +4,19 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.58] — 2026-05-25
+
+Hotfix — v1.1.57 broke the Vercel build because the `BrandMetrics` interface lost its closing brace during the `avg_citation_position` edit. Vercel surfaced this as `Command "npm run build" exited with 1`; the underlying SWC parser error was `Expected '{', got 'interface'` at `lib/metrics.ts:53` (the next interface after BrandMetrics was being read as if it were still inside BrandMetrics). One-line fix; the feature itself was correct.
+
+### Fixed
+- **Restored the missing `}` on the `BrandMetrics` interface in `lib/metrics.ts`.** Without it, the parser kept reading into the `SovSlice` declaration and failed at the `export interface` keyword. SWC reports this as a syntax error rather than a type error, which is why Vercel's log shows a webpack error instead of a TS diagnostic.
+
+### Verification
+Ran `npm run build` against the patched tree in a sandboxed Linux env (Node 22, Next 14.2.5). Build completed through every route in `app/api/projects/[id]/...` and the `/projects/[id]` page bundle, producing the expected `First Load JS shared by all: 87.5 kB` summary with no errors. Confirmed the metric and the new card both compile.
+
+### Notes
+- No behavior change vs the v1.1.57 intent — same data, same card, same accent, same grid expansion to 6 columns. Vercel should now redeploy cleanly.
+
 ## [1.1.57] — 2026-05-24
 
 New "Avg citation position" card in the bottom Pulse row — surfaces how prominently the client appears inside the AIOs where they're cited.
