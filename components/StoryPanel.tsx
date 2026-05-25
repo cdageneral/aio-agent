@@ -386,11 +386,19 @@ export default function StoryPanel({
                 sub="view all →"
                 accent="amber"
                 onClick={() => {
+                  // v1.1.60: the standalone "Other domains in AIOs" section is
+                  // gone — the view now lives inside the Citation landscape
+                  // panel's "Other domains" tab. Scroll there and dispatch a
+                  // window event the panel listens for so it flips to the
+                  // correct tab in one click.
                   if (typeof document !== "undefined") {
-                    document.getElementById("section-other-domains")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                    document.getElementById("section-citation-landscape")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }
+                  if (typeof window !== "undefined") {
+                    window.dispatchEvent(new CustomEvent("aio:citation-landscape-show-tab", { detail: { tab: "others" } }));
                   }
                 }}
-                explanation="The percentage of AIO citation slots going to sources NOT in your tracked set — Wikipedia, Reddit, news sites, industry sites you haven't added as competitors. High 'Others' means lots of zero-click attention is being captured by sources you might want to add as competitors. Click the card to scroll to the full domain list."
+                explanation="The percentage of AIO citation slots going to sources NOT in your tracked set — Wikipedia, Reddit, news sites, industry sites you haven't added as competitors. High 'Others' means lots of zero-click attention is being captured by sources you might want to add as competitors. Click the card to scroll to the Citation landscape and open the Other domains tab."
               />
             </div>
           </div>

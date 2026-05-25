@@ -4,6 +4,31 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.60] — 2026-05-24
+
+Dashboard layout — the standalone "Brand comparison" and bottom-of-page "Other domains in AIOs" sections are merged into a single tabbed surface called **Citation landscape**. Motivation: the two sections answered the same underlying question ("who's cited in our AIOs?") but split the answer across two scroll positions on the page — Brand comparison sat directly under StoryPanel, Other domains lived all the way at the bottom — so users had to flip back and forth to compare tracked-brand performance against the wider web. The merged panel keeps both views available behind tabs and adds a new combined ranking so users can see the whole landscape at once without leaving the slot where they already expect to find the competitive context.
+
+### Added
+- **`components/CitationLandscape.tsx`** — new tabbed surface with three tabs:
+  - **Tracked brands** — renders the existing `CompetitorTable` unchanged. Same brand-by-brand row layout (Brand, Domain, AIOs acquired, Citation slots, Citation rate market/footprint, Mention rate). The client row stays highlighted with `--accent-blue-soft`.
+  - **Other domains** — renders the existing `OtherDomainsTabs` unchanged. The component's own inner tabs (Top 10 / Full list / By source type) survive intact, just nested under the outer "Other domains" tab.
+  - **All** — new combined ranked list mixing tracked brands AND other domains, sorted by AIO count (desc). Each row is tagged with its origin via a pill — `tracked brand` (blue, `#4f8cff` on `rgba(79,140,255,0.15)`) or the source type for other domains (purple, `#a878ff`). The client row keeps the accent-blue background so it's still visually distinct in the combined view. Citation-rate column shows the percentage for tracked brands and an em-dash for other domains (rate isn't defined for non-brand sources). Each tab pill in the tab strip also shows a count badge.
+- **Window event `aio:citation-landscape-show-tab`** — fired by StoryPanel's "Others" pulse card so the card's onClick still leads the user to the Other domains view even though that view is now nested inside the tabbed panel rather than being its own page section. Sibling-to-sibling communication via CustomEvent (rather than prop-drilling through Dashboard) because there's only one CitationLandscape on the page and the alternative would force Dashboard to track tab state for a child purely so a different child could nudge it.
+
+### Changed
+- **`components/Dashboard.tsx`** — removed the `CompetitorTable` and `OtherDomainsTabs` imports; added `CitationLandscape`. The `<section>` that used to render `<CompetitorTable />` (titled "Brand comparison") now renders `<CitationLandscape latest={latest} />` (titled "Citation landscape") with a new subtitle eyebrow that names the three tab choices. The section's `id` changed from anonymous to `section-citation-landscape` so the StoryPanel pulse-card scroll target survives. The standalone `<section id="section-other-domains">` at the bottom of the page was deleted — the OtherDomainsTabs view now lives inside the merged panel above.
+- **`components/StoryPanel.tsx`** — the "Others" pulse card's onClick used to call `document.getElementById("section-other-domains")?.scrollIntoView(...)`. It now scrolls to `section-citation-landscape` AND dispatches the new `aio:citation-landscape-show-tab` window event with `{ tab: "others" }` so the panel opens the Other domains tab in the same click. Popover explanation text updated to reflect the new destination.
+
+### Not changed
+- **`CompetitorTable.tsx` and `OtherDomainsTabs.tsx` are kept on disk untouched.** CitationLandscape renders them as the bodies of the "Tracked brands" and "Other domains" tabs, so no logic was duplicated — future tweaks to e.g. the source-type breakdown still flow through OtherDomainsTabs.
+- **No data, API, or metrics changes.** The merged view reads from the existing `latest.brands` and `latest.other_domains` payload fields; nothing in `/api/projects/[id]/metrics` was touched.
+- **Section order is otherwise preserved.** ProjectHeader → progress/banners → CompetitorPanel + KeywordPanel → FirstRefreshBanner → StoryPanel → **Citation landscape** (was Brand comparison) → What changed → AIO trends → Topic clusters → AIO Opportunities → Keyword drilldown. The bottom-of-page Other domains section is gone — its content lives in the Citation landscape tab now.
+
+### Notes
+- Hard-reload after deploy so the browser picks up the new client bundle.
+- The combined "All" view's sort is fixed at "AIO count desc" for this release. A user-controlled sort dropdown is the obvious follow-up if multiple sorts get requested; the unified row shape in `CitationLandscape.tsx` already carries the fields needed (citation_rate, domain, source_type) so adding a sort selector is a JSX-only change.
+- The `Pulse` "Others" card still surfaces `othersShare` as its headline number — the only behavior change is where the click lands.
+
 ## [1.1.59] — 2026-05-24
 
 Dashboard layout — removed the Share of Voice donut panel and promoted the Brand comparison table into its slot. Motivation: the donut's "share of voice" denominator (CHIP's citations ÷ every citation slot across every AIO, including non-brand sources like government sites and news outlets) was easy to confuse with the executive-summary "Your position" metric, which uses a head-to-head denominator. The two numbers diverged dramatically in real screenshots (e.g. 15.0% vs 79.7%) and stakeholders kept asking why. The Brand comparison table communicates the same competitive context — who's cited, how often, in what position — in a directly readable form without the denominator ambiguity.

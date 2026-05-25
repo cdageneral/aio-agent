@@ -18,12 +18,16 @@ import StoryPanel from "./StoryPanel";
 import FirstRefreshBanner from "./FirstRefreshBanner";
 import { DateRange, DEFAULT_RANGE, filterByDateRange } from "./chartUtils";
 import type { SuggestedCompetitor } from "./SmartSegmentDetector";
-import CompetitorTable from "./CompetitorTable";
+// v1.1.60: CompetitorTable + OtherDomainsTabs merged behind a single tabbed
+// surface (CitationLandscape) so the user gets the whole "who's cited in
+// AIOs?" picture without scrolling between two sections. The component files
+// for CompetitorTable / OtherDomainsTabs are kept on disk — CitationLandscape
+// renders them as the bodies of two of its three tabs.
+import CitationLandscape from "./CitationLandscape";
 import KeywordExplorer from "./KeywordExplorer";
 import KeywordClusters from "./KeywordClusters";
 import QuickWinsPanel from "./QuickWinsPanel";
 import WhatChangedPanel from "./WhatChangedPanel";
-import OtherDomainsTabs from "./OtherDomainsTabs";
 import InfoTooltip from "./InfoTooltip";
 import RefreshProgress, { type RefreshProgressData } from "./RefreshProgress";
 // v1.1.55: handlers for the relocated Copy PPT Prompt / Export Full Report
@@ -635,14 +639,23 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         onKindFilterChange={setKindFilter}
       />
 
-      {/* v1.1.59: Brand comparison promoted to this slot (previously held by
-          ShareOfVoiceHero). Sits directly after StoryPanel so the user reads
-          the executive KPIs and then immediately sees the competitor table
-          that explains those numbers. The original Brand comparison block
-          at the bottom of the page has been removed to avoid duplication. */}
-      <section className="surface p-5">
-        <h2 className="h2 mb-3">Brand comparison</h2>
-        <CompetitorTable latest={latest} />
+      {/* v1.1.60: Citation landscape — merges the former "Brand comparison"
+          (CompetitorTable) and the bottom-of-page "Other domains in AIOs"
+          (OtherDomainsTabs) into one tabbed surface. Three tabs: Tracked
+          brands (the original brand-by-brand table), Other domains (the
+          original Top 10 / Full list / By source type view), and All (a new
+          combined ranked list mixing brands + other domains by AIO count).
+          Sits in the slot v1.1.59 gave to the Brand comparison table — same
+          place the user already expects to find the competitive context. The
+          standalone "Other domains in AIOs" section at the bottom of the page
+          was removed at the same time to avoid duplication. */}
+      <section className="surface p-5" id="section-citation-landscape">
+        <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
+          <h2 className="h2">Citation landscape</h2>
+          <span className="text-xs muted">Tracked brands · other domains · everything together</span>
+        </div>
+        <p className="text-xs muted mb-3">Everything cited in AIOs — pivot from your tracked competitive set to the wider web, or see it all in one ranking.</p>
+        <CitationLandscape latest={latest} />
       </section>
 
       <section className="surface p-5">
@@ -811,13 +824,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         />
       </section>
 
-      {/* v1.1.59: Brand comparison section relocated above (just after
-          StoryPanel) — see the comment on that block. It used to sit here. */}
-
-      <section className="surface p-5" id="section-other-domains">
-        <h2 className="h2 mb-3">Other domains in AIOs</h2>
-        <OtherDomainsTabs latest={latest} />
-      </section>
+      {/* v1.1.60: The standalone "Other domains in AIOs" section that used to
+          sit here has been folded into the CitationLandscape panel above
+          (rendered just after StoryPanel). The OtherDomainsTabs component is
+          kept on disk and is now rendered as the "Other domains" tab inside
+          CitationLandscape — no logic was duplicated. */}
     </div>
   );
 }
