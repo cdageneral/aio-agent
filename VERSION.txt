@@ -1,7 +1,7 @@
 aio-coverage-tracker
-version: 1.1.62
-released: 2026-05-24
-codename: three-slide-prompt
+version: 1.1.63
+released: 2026-05-25
+codename: brand-compare-on-landscape
 
 This file mirrors `package.json` → `version`. Bump both together.
 See CHANGELOG.md for what's in each release.

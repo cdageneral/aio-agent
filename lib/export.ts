@@ -403,9 +403,16 @@ interface PptPromptLatest {
   total_citation_slots?: number;
   brands?: Array<{
     brand_name: string;
+    /** v1.1.63: surfaced in slide 1's tracked-brand comparison block so each
+     *  row in the deck names the domain the brand was matched on. */
+    domain?: string;
     kind: "client" | "competitor";
     citation_slots?: number;
     citation_rate?: number;
+    /** v1.1.63: organic-footprint citation rate — citations / AIOs the
+     *  brand actually ranked organically for. Same definition the
+     *  CompetitorTable's "Citation rate (footprint)" column uses. */
+    citation_rate_organic?: number;
     mention_count?: number;
     mention_rate?: number;
     aios_acquired?: number;
@@ -600,6 +607,31 @@ export function buildPptPrompt(
     `5. TOP BRAND · ${topBrand?.brand_name ?? "—"} — number: ${pct(topBrandShare)} — caption: "${topBrandSubtitle}" — accent: pink`,
     `6. OTHERS — number: ${pct(othersShare)} — caption: "non-tracked sources (Wikipedia, Reddit, news, etc.)" — accent: amber`,
   ].join("\n");
+
+  // ── Slide-1 tracked-brand comparison rows (v1.1.63) ────────────────────
+  //
+  // Mirrors the dashboard's CompetitorTable: every tracked brand (client +
+  // competitors), sorted by citation_rate desc. Columns are identical to the
+  // panel — Brand · Domain · AIOs acquired · Citation slots · Citation rate
+  // (market) · Citation rate (footprint) · Mention rate — so the slide reads
+  // 1:1 with the on-screen table. The client row is flagged with a "(YOU)"
+  // tag and "highlight" hint so the receiving AI uses the deck's accent
+  // background on it (matches the `--accent-blue-soft` row treatment in
+  // CompetitorTable.tsx).
+  const brandTableRows = [...(latest.brands ?? [])]
+    .sort((a, b) => (b.citation_rate ?? 0) - (a.citation_rate ?? 0));
+  const brandTableLines = brandTableRows.length === 0
+    ? `  (no tracked brands cited yet — add competitors and refresh)`
+    : brandTableRows.map((b, i) => {
+        const isClient = b.kind === "client";
+        const tag = isClient ? "  ← CLIENT — highlight row with the deck's primary accent background" : "";
+        return [
+          `${(i + 1).toString().padStart(2, " ")}. ${b.brand_name}${isClient ? " (YOU)" : ""}${tag}`,
+          `    domain: ${b.domain ?? "—"}`,
+          `    AIOs acquired: ${intFmt(b.aios_acquired)}  ·  citation slots: ${intFmt(b.citation_slots)}`,
+          `    citation rate (market): ${pct(b.citation_rate ?? 0)}  ·  citation rate (footprint): ${pct(b.citation_rate_organic ?? 0)}  ·  mention rate: ${pct(b.mention_rate ?? 0)}`,
+        ].join("\n");
+      }).join("\n");
 
   // ── Slide-2 cluster grid lines ─────────────────────────────────────────
   const clusterLines = clusters.map((c, i) => {
@@ -820,6 +852,18 @@ ${heroKpiLines}
 
 ROW 2 — Six metric cards in a single horizontal strip directly below the hero row (each with a thin colored accent bar above the label):
 ${metricKpiLines}
+
+ROW 3 — "TRACKED BRAND COMPARISON" table, directly below the metric strip:
+  - Section eyebrow (small uppercase, deck's primary accent color): "TRACKED BRAND COMPARISON"
+  - Section title: "How ${brand} stacks up against tracked competitors"
+  - One row per tracked brand (client + every competitor), sorted by citation rate market desc.
+  - Table columns (left → right): BRAND · DOMAIN · AIOS ACQUIRED · CITATION SLOTS · CITATION RATE (MARKET) · CITATION RATE (FOOTPRINT) · MENTION RATE
+  - Column alignment: BRAND + DOMAIN left-aligned; the four numeric columns right-aligned; bold the CITATION RATE (MARKET) cell on every row since that's the column the deck's executive reader anchors on.
+  - Header row styling: small uppercase, muted, thin underline.
+  - Highlight the client row by tinting its background with the deck's primary accent (matches the dashboard's CompetitorTable client-row treatment) and append a small "client" pill next to the brand name.
+  - Row data (in this exact order, do NOT recalculate):
+${brandTableLines}
+  - Footer note (small, muted) under the table: "Citation rate (market) = brand's share of every AIO triggered. Citation rate (footprint) = brand's share of AIOs they actually ranked organically for. Mention rate = AIOs where the brand name appears in the answer text, cited or not."
 
 FOOTER on slide: "Source: ${brand} AIO crawl, ${ctx.universe_label ? ctx.universe_label + " " : ""}keyword universe (${intFmt(totalKw)} queries), ${stampHuman}. Citation slots = distinct domains cited per AIO, summed across all ${intFmt(totalAios)} AIOs."
 

@@ -4,6 +4,24 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.63] — 2026-05-25
+
+Slide 1 of the PPT prompt now ends with a "TRACKED BRAND COMPARISON" table — every tracked brand (client + competitors) with the same columns the dashboard's CompetitorTable shows: BRAND · DOMAIN · AIOS ACQUIRED · CITATION SLOTS · CITATION RATE (MARKET) · CITATION RATE (FOOTPRINT) · MENTION RATE. Rows are sorted by citation rate (market) desc, the client row gets the deck's primary accent background + a "client" pill, and the receiving AI is told to bold the market-rate column on every row (that's the column an executive anchors on). Motivation: stakeholders kept asking "OK but how does CHIP actually stack up against the brands you're tracking?" — slide 1 had the share-of-voice context implied via the Your-position / Top-brand cards but never spelled out the full head-to-head, so the answer was always "open the dashboard." Now it's on the slide.
+
+### Changed
+- **`lib/export.ts`** — added ROW 3 (TRACKED BRAND COMPARISON) to slide 1, directly under the 6-card metric strip and above the slide footer. Builder logic sorts `latest.brands` by `citation_rate` desc and emits one row per brand with the four numeric columns plus domain. The client row is flagged with `← CLIENT — highlight row with the deck's primary accent background` so the receiving AI applies the same visual treatment the dashboard CompetitorTable uses (`--accent-blue-soft` row background). Falls back gracefully to `(no tracked brands cited yet — add competitors and refresh)` when the brands array is empty.
+- **`PptPromptLatest.brands[]`** interface gained two optional fields: `domain` (so the slide can name the domain each brand was matched on) and `citation_rate_organic` (the "footprint" citation rate the CompetitorTable shows). Both are pulled straight from `lib/metrics.ts` — no new computation, no recalculation, the slide reads the exact same numbers the on-screen table renders.
+
+### Not changed
+- **Slides 2 and 3 unchanged.** Cluster grid + opportunity map (slide 2) and keyword-level + AIO drilldown (slide 3) emit byte-identical output to v1.1.62.
+- **No API, data, or metrics changes.** The brand-comparison rows use fields already on the `/api/projects/[id]/metrics` payload (`brands[].domain`, `brands[].citation_rate_organic`, etc.). No new fetch, no new SQL, no schema migration.
+- **Dashboard handler unchanged.** `copyPptPromptHandler` already fetches metrics + keyword detail; v1.1.63 only consumes additional fields off the metrics payload it was already loading.
+- **Backward compatibility.** The new brand fields are optional on `PptPromptLatest.brands[]` so any older caller that strips the metrics payload still compiles and the prompt still builds; missing values render as `—` in the table.
+
+### Notes
+- Per user preference: every number in the comparison table is the SAME real metric the dashboard CompetitorTable renders — nothing modeled, nothing simulated. The slide is a copy of the on-screen table, not a recomputation of it.
+- Hard-reload after deploy so the browser picks up the new client bundle (only `lib/export.ts` shipped this release, but the bundle is still rebuilt).
+
 ## [1.1.62] — 2026-05-25
 
 Copy PPT Prompt now emits THREE slides instead of two. The third slide is the keyword-level opportunity view — a top-17 keyword table on the left (mixed wins and losses, interleaved and sorted by citation volume) and two real AIO drill-down examples on the right (best win with the CHIP rank highlighted, worst miss with the competitor citation list). Slides 1 and 2 also pick up the layout the user actually sees in the app: slide 1 now has the two emphasized hero cards on row 1 (Available AIOs, AIO Penetration) and the SIX metric cards from the StoryPanel pulse strip on row 2 (Your position · Brand mentions · Citation share · Avg citation position · Top brand · Others), so the slide reads identically to the dashboard top-of-page. Motivation: a single Copy PPT Prompt click now produces the full executive AIO storyboard — landscape → opportunity map → keyword + AIO drilldown — instead of forcing the user to assemble the third slide by hand from the drilldown panel screenshots.
