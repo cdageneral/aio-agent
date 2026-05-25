@@ -153,15 +153,21 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     }
   }
 
-  // v1.1.66: applySeedKeywords() previously lived here — it was the
-  // callback wired into ProjectHeader.onSeedKeywordsApplied so the
-  // SmartSegmentDetector could push its LLM-suggested seed keywords
-  // into the keyword universe in one click. With the detector removed,
-  // no caller remains, so the helper was deleted. The keyword universe
-  // is now populated via the KeywordPanel's manual / CSV-import paths
-  // (POST /api/projects/{id}/keywords still works the same way the
-  // helper used to call it — re-adding this is a ~10-line restore from
-  // git history if the detector is ever brought back).
+  /** Push the LLM-suggested seed keywords into the keyword universe right
+   *  away as `manual` source so the user lands on a populated panel. */
+  async function applySeedKeywords(seeds: string[]) {
+    if (!seeds.length) return;
+    const res = await fetch(`/api/projects/${projectId}/keywords`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ method: "manual", keywords: seeds }),
+    });
+    if (res.ok) {
+      const j = await res.json();
+      setRefreshMsg(`Universe seeded — ${j.added} keyword(s) added. Click Run refresh to fetch AIOs.`);
+      await load();
+    }
+  }
 
   useEffect(() => { load(); }, [load]);
 
@@ -206,66 +212,26 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           console.warn("[onRefresh] failed to persist region change:", j);
         }
       }
-      // v1.1.64: the refresh endpoint is now CHUNKED. We POST it once with
-      // no params to start chunk 0 (which also creates the snapshot row),
-      // read total_chunks from the response, then loop the remaining
-      // chunks sequentially. This keeps each function invocation comfortably
-      // under Vercel's 300s Pro cap — for 600+ keyword universes the
-      // old single-call refresh used to 504 once total wall-clock time
-      // crossed 300s. Polling /refresh/progress continues to drive the live
-      // progress widget unchanged because the polling endpoint counts
-      // serp_results rows, which tick up across all chunks since each chunk
-      // appends to the same snapshot.
-
-      // Helper: POST one chunk and return parsed body. Wrapped so the
-      // defensive parsing (handles HTML error pages, Vercel timeouts, etc.)
-      // applies to every chunk POST, not just the first.
-      const postChunk = async (params: string): Promise<any> => {
-        const res = await fetch(
-          `/api/projects/${projectId}/refresh${params ? `?${params}` : ""}`,
-          { method: "POST" },
-        );
-        let parsed: any = null;
-        try {
-          parsed = await res.json();
-        } catch {
-          const body = await res.text().catch(() => "");
-          throw new Error(
-            res.ok
-              ? "Refresh returned unparseable response"
-              : `Server returned ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
-          );
-        }
-        if (!res.ok) throw new Error(parsed?.error ?? `Refresh failed (${res.status})`);
-        return parsed;
-      };
-
-      // Chunk 0 — server creates snapshot and processes the first slice.
-      let chunkResp = await postChunk("");
-      const snapshotIdLocal: string = chunkResp.snapshot_id;
-      const totalChunks: number = chunkResp.total_chunks ?? 1;
-
-      // Subsequent chunks — sequential. The /refresh/progress polling loop
-      // (separate effect below) will keep the user's progress widget alive
-      // throughout. We don't need a per-chunk UI update because the widget
-      // shows live "done of total" anyway; we just keep firing chunks until
-      // is_final.
-      for (let n = 1; n < totalChunks; n++) {
-        if (chunkResp.is_final) break;
-        chunkResp = await postChunk(
-          `snapshotId=${encodeURIComponent(snapshotIdLocal)}&chunk=${n}`,
+      const res = await fetch(`/api/projects/${projectId}/refresh`, { method: "POST" });
+      // v1.1.48: parse the response defensively. A common server-side failure
+      // mode (function crash, Vercel timeout returning HTML, missing API key
+      // returning a 500 page, etc.) is for the response to NOT be valid JSON.
+      // Without this guard, `await res.json()` would throw a "Unexpected
+      // token < in JSON" error that gets swallowed into a useless "Refresh
+      // failed" string instead of surfacing the actual HTTP failure.
+      let j: any = null;
+      try {
+        j = await res.json();
+      } catch {
+        const body = await res.text().catch(() => "");
+        throw new Error(
+          res.ok
+            ? "Refresh returned unparseable response"
+            : `Server returned ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
         );
       }
-
-      // Final response carries the cumulative totals (server pulls them
-      // from snapshotProgress() before responding, so they match what the
-      // /metrics endpoint will return once we re-load).
-      const totalAios = chunkResp.aios_triggered ?? chunkResp.cumulative_aios ?? 0;
-      const totalFailed = chunkResp.failed ?? chunkResp.cumulative_failed ?? 0;
-      setRefreshMsg(
-        `Snapshot saved — ${totalAios} AIO(s) detected${totalFailed ? `, ${totalFailed} errored` : ""}` +
-          (totalChunks > 1 ? ` · processed in ${totalChunks} chunks to avoid Vercel's 300s function cap` : "."),
-      );
+      if (!res.ok) throw new Error(j?.error ?? `Refresh failed (${res.status})`);
+      setRefreshMsg(`Snapshot saved — ${j.aios_triggered} AIO(s) detected${j.failed ? `, ${j.failed} errored` : ""}.`);
       await load();
       // v1.1.15: nudge child panels (Quick Wins, Drilldown) so they refetch
       // their own data with the new snapshot rather than show stale state.
@@ -416,10 +382,14 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     const proj = data?.project;
     const regionLbl = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
     try {
+      // v1.1.62: `latest` is now forwarded so the printable cover page can
+      // render a small visual executive summary (KPI tiles drawn natively
+      // via jsPDF, not html2canvas) on top of the white cover sheet.
       await exportFullReportToPdf(root, {
         brand_name: proj?.brand_name ?? "—",
         client_url: proj?.client_url ?? "—",
         region_label: regionLbl,
+        latest: data?.latest ?? null,
       });
     } catch (e) {
       console.error("Full report export failed", e);
@@ -430,43 +400,12 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     if (typeof navigator === "undefined") return;
     const proj = data?.project;
     const regionLbl = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
-
-    // v1.1.62: the prompt builder now emits THREE slides. Slide 3 (keyword
-    // drilldown + AIO examples) needs row-level data that isn't in the
-    // metrics payload, so fetch /keywords/detail before assembling. Use the
-    // same region/kind scope the dashboard is currently rendering so the
-    // numbers on slide 3 match what the stakeholder is looking at. If the
-    // fetch fails (network, no snapshot yet, etc.) we still build the
-    // prompt — the builder gracefully skips slide 3 when keywords are null.
-    let keywords: any[] | null = null;
-    try {
-      const params = new URLSearchParams({
-        region: region === "us" ? "us" : region === "ca" ? "ca" : "us,ca",
-      });
-      if (kindFilter !== "all") params.set("kind", kindFilter);
-      params.set("_", Date.now().toString());
-      const res = await fetch(
-        `/api/projects/${projectId}/keywords/detail?${params.toString()}`,
-        { cache: "no-store" },
-      );
-      if (res.ok) {
-        const j = await res.json();
-        keywords = Array.isArray(j?.keywords) ? j.keywords : null;
-      }
-    } catch (e) {
-      console.warn("PPT prompt: keyword detail fetch failed — slide 3 will be skipped", e);
-    }
-
-    const prompt = buildPptPrompt(
-      data?.latest ?? null,
-      {
-        brand_name: proj?.brand_name ?? "—",
-        client_url: proj?.client_url ?? "—",
-        region_label: regionLbl,
-        universe_label: proj?.segment_l3 ?? proj?.segment_l2 ?? proj?.segment_l1 ?? undefined,
-      },
-      keywords,
-    );
+    const prompt = buildPptPrompt(data?.latest ?? null, {
+      brand_name: proj?.brand_name ?? "—",
+      client_url: proj?.client_url ?? "—",
+      region_label: regionLbl,
+      universe_label: proj?.segment_l3 ?? proj?.segment_l2 ?? proj?.segment_l1 ?? undefined,
+    });
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(prompt);
@@ -486,7 +425,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     } catch (e) {
       console.error("PPT prompt copy failed", e);
     }
-  }, [data, region, projectId, kindFilter]);
+  }, [data, region]);
 
   // Push current handlers + state into the global header store on every
   // change that matters. Cleared on unmount so the buttons disappear when
@@ -532,19 +471,20 @@ export default function Dashboard({ projectId }: { projectId: string }) {
 
   return (
     <div className="space-y-8" data-aio-report-root="true">
-      {/* v1.1.66: ProjectHeader no longer hosts the SmartSegmentDetector, so
-          the onCompetitorsSuggested + onSeedKeywordsApplied callbacks are
-          no longer wired through it. The persistSuggestions() helper and
-          the suggestedCompetitors state stay here — the CompetitorPanel
-          still consumes `suggested` (so any prior detector-generated
-          suggestions persisted in project.suggested_competitors continue
-          to render), and a future re-enable of the detector can re-wire
-          a callback that calls persistSuggestions() directly. */}
       <ProjectHeader
         project={project}
         onSaved={load}
         region={region}
         onRegionChange={setRegion}
+        onCompetitorsSuggested={(c) => {
+          // De-dupe against currently tracked competitors AND the existing suggestion list.
+          const trackedDomains = new Set<string>(competitors.map((x: any) => (x.domain ?? "").toLowerCase()));
+          const existingDomains = new Set(suggestedCompetitors.map((x) => x.domain.toLowerCase()));
+          const fresh = c.filter((x) => x.domain && !trackedDomains.has(x.domain.toLowerCase()) && !existingDomains.has(x.domain.toLowerCase()));
+          if (fresh.length === 0) return;
+          persistSuggestions([...suggestedCompetitors, ...fresh]);
+        }}
+        onSeedKeywordsApplied={applySeedKeywords}
       />
 
       {/* v1.1.37: live refresh progress. Shown whenever we have a polled
@@ -694,14 +634,23 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         onRefresh={onRefresh}
       />
 
-      <StoryPanel
-        project={project}
-        latest={latest}
-        growth={growth}
-        region={region}
-        kindFilter={kindFilter}
-        onKindFilterChange={setKindFilter}
-      />
+      {/* v1.1.62: data-export-section attributes drive the printable Full
+          Report PDF export. The exporter (lib/export.ts) walks these in a
+          fixed user-requested order — story → brands → what-changed →
+          position-chart → clusters → prioritization → drilldown — and
+          captures each panel onto its own white page. The attributes are
+          inert in the live UI; they exist only to give the exporter stable
+          selectors that survive future class renames. */}
+      <div data-export-section="story" data-export-title="Executive summary">
+        <StoryPanel
+          project={project}
+          latest={latest}
+          growth={growth}
+          region={region}
+          kindFilter={kindFilter}
+          onKindFilterChange={setKindFilter}
+        />
+      </div>
 
       {/* v1.1.60: Citation landscape — merges the former "Brand comparison"
           (CompetitorTable) and the bottom-of-page "Other domains in AIOs"
@@ -713,7 +662,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           place the user already expects to find the competitive context. The
           standalone "Other domains in AIOs" section at the bottom of the page
           was removed at the same time to avoid duplication. */}
-      <section className="surface p-5" id="section-citation-landscape">
+      <section className="surface p-5" id="section-citation-landscape" data-export-section="brands" data-export-title="Tracked brand comparison">
         <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
           <h2 className="h2">Citation landscape</h2>
           <span className="text-xs muted">Tracked brands · other domains · everything together</span>
@@ -722,7 +671,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <CitationLandscape latest={latest} />
       </section>
 
-      <section className="surface p-5">
+      <section className="surface p-5" data-export-section="what-changed" data-export-title="What changed — client and competitors">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="h2">What changed</h2>
           <span className="text-xs muted">Snapshot diff · digest-ready summary you can ship to Slack.</span>
@@ -763,7 +712,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
             <p className="text-xs muted mb-2">How often Google is surfacing an AIO across tracked queries — market volume, not brand-specific.</p>
             <GrowthChart series={series} range={range} />
           </div>
-          <div className="surface-2 p-4">
+          <div className="surface-2 p-4" data-export-section="position-chart" data-export-title="Your position over time">
             {/* v1.1.42: renamed from "Acquisition rate" — the prior name was
                 vague and didn't make clear this is the time-series view of
                 the same "Your position" number in the executive summary.
@@ -778,7 +727,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         </div>
       </section>
 
-      <section className="surface p-5">
+      <section className="surface p-5" data-export-section="clusters" data-export-title="Topic clusters">
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
           <div>
             <h2 className="h2">Topic clusters</h2>
@@ -829,7 +778,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <section className="surface p-5" id="section-quick-wins">
+      <section className="surface p-5" id="section-quick-wins" data-export-section="prioritization" data-export-title="Cluster prioritization — AIO opportunities">
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
           <div>
             <h2 className="h2" style={{ display: "inline-flex", alignItems: "center" }}>
@@ -872,7 +821,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         />
       </section>
 
-      <section className="surface p-5">
+      <section className="surface p-5" data-export-section="drilldown" data-export-title="Keyword drilldown">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="h2">Keyword drilldown</h2>
           <span className="text-xs muted">Click any row to expand the AIO answer, citation list, and brand-hit breakdown.</span>

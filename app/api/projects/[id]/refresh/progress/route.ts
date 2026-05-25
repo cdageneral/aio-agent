@@ -57,23 +57,12 @@ function noStoreJson(body: any, init?: { status?: number }) {
 }
 
 // v1.1.45: hard age cap on 'running' snapshots. Vercel function max is 60s
-// (Hobby) or 300s (Pro). A snapshot still in 'running' status well past the
-// total expected refresh time is definitely a zombie — the serverless
-// invocation that owned it was killed by the runtime time limit and we
-// never got to call finalizeSnapshot. Anything past this threshold is
-// auto-failed so the row stops being returned as a "live" refresh on
-// subsequent polls.
-//
-// v1.1.64: raised from 600s (10 min) to 3600s (60 min) to accommodate the
-// new chunked refresh design. A multi-chunk refresh keeps the snapshot in
-// 'running' for the entire duration of all chunks combined — at ~3 min
-// per 200-task chunk, even a 4000-task universe (~20 chunks) completes in
-// ~60 minutes. Anything longer than that almost certainly IS a dead
-// invocation that won't recover, so auto-failing at the 60-min mark
-// remains the right call. The per-chunk stall detection below (no new
-// serp_results in 60s) catches dead invocations on a much tighter
-// timeline regardless of this overall cap.
-const ZOMBIE_THRESHOLD_SEC = 3600;
+// (Hobby) or 300s (Pro). A snapshot still in 'running' status 10+ minutes
+// after ran_at is definitely a zombie — the serverless invocation that owned
+// it was killed by the runtime time limit and we never got to call
+// finalizeSnapshot. Anything past this threshold is auto-failed so the row
+// stops being returned as a "live" refresh on subsequent polls.
+const ZOMBIE_THRESHOLD_SEC = 600;
 
 export async function GET(_req: NextRequest, ctx: { params: { id: string } }) {
   let snap = await latestSnapshotAnyStatus(ctx.params.id);

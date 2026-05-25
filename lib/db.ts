@@ -349,18 +349,6 @@ export async function finalizeSnapshot(id: string, aios_triggered: number, statu
   await sql`UPDATE snapshots SET aios_triggered = ${aios_triggered}, status = ${status}, error = ${error ?? null} WHERE id = ${id};`;
 }
 
-/**
- * v1.1.64: fetch a single snapshot by id. Used by the chunked refresh route
- * to validate that the snapshotId echoed back by the client (a) actually
- * exists, (b) belongs to the project being refreshed, and (c) is still in
- * the running state (so a chunk POST can't accidentally append work to an
- * already-completed snapshot).
- */
-export async function getSnapshot(id: string): Promise<Snapshot | null> {
-  const { rows } = await sql<Snapshot>`SELECT * FROM snapshots WHERE id = ${id};`;
-  return rows[0] ?? null;
-}
-
 export async function listSnapshots(project_id: string): Promise<Snapshot[]> {
   const { rows } = await sql<Snapshot>`
     SELECT * FROM snapshots WHERE project_id = ${project_id} ORDER BY ran_at ASC;`;
