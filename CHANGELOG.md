@@ -4,6 +4,40 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
+## [1.1.57] — 2026-05-24
+
+New "Avg citation position" card in the bottom Pulse row — surfaces how prominently the client appears inside the AIOs where they're cited.
+
+### Added
+- **New `BrandMetrics.avg_citation_position` field** in `lib/metrics.ts`. For each brand, we now iterate the AIOs they're cited in, take the brand's best (lowest) citation slot index in that AIO's citation list, and average across all such AIOs. `null` when the brand has zero acquired AIOs. Uses the same "best position" definition the per-keyword drilldown already uses for its `position` column, so the new card is directly comparable to numbers a user sees when they drill in.
+- **New "Avg citation position" Pulse card** in `components/StoryPanel.tsx`, inserted immediately after the "Citation share" card in the bottom-row placement grid. Renders `client.avg_citation_position.toFixed(1)` with subtitle `across N cited AIOs`. Accent is cyan to visually pair with the top-row SERP-saturation cards (AIO penetration / Available AIOs), since "position inside an AIO" is also a SERP-level structural fact rather than a head-to-head competitive comparison.
+- The bottom-row grid was widened from `lg:grid-cols-5` to `lg:grid-cols-6` to accommodate the new card without making any existing card narrower at the md or sm breakpoints.
+
+### How
+- Single-loop addition in `computeSnapshotMetrics` — `best_position_sum` and `best_positions_n` accumulators tick alongside the existing `aios_acquired` counter, so the new metric costs O(1) extra work per AIO and zero extra DB queries. No schema or API changes.
+- The new card derives from `client.avg_citation_position` already in the metrics payload — no separate fetch.
+
+### Notes
+- Lower is better. A value of 1.0 means you're always the very first cited source; 4.5 means on average you sit in the bottom half of a typical 5-citation AIO.
+- The card shows "—" when the client has zero acquired AIOs in scope (e.g. a brand-new project before its first refresh, or a region/kind filter that excludes all of the client's hits). Same handling as the per-keyword drilldown's `position` column when the brand isn't cited.
+- Hard-reload after deploy so the browser fetches the new client bundle.
+
+## [1.1.56] — 2026-05-24
+
+Pulse-card swap — the bottom-row "Acquisition · {brand}" card is replaced with a "Your position" card so the bottom row leads with the leader-vs-field metric.
+
+### Changed
+- **First Pulse card in the placement row now reads "Your position".** The card previously labeled "Acquisition · CHIP" rendered `aios_acquired / total_keywords` (`clientShare`) — the same number the "Citation share" card to its right already showed, so two adjacent cards were duplicating the same metric under different labels. The slot now shows `client.citation_rate` (e.g. 79.7%) under a "Your position" eyebrow, with a subtitle that names the runner-up when the client leads ("CHIP leads — Canada GOV 76.9%") or the leader when the client is behind ("2nd behind X (Y%)"). The accent stays blue and the popover copy is rewritten to explain the citation-rate framing.
+- **Executive Summary "Your position" InsightBlock is intentionally retained.** Per the user's instruction the existing InsightBlock above the Pulse row is not removed — the metric now appears in both surfaces. Reasoning preserved as a code comment in `StoryPanel.tsx` so a future cleanup pass knows the duplication is deliberate.
+
+### How
+- Single-component edit in `components/StoryPanel.tsx`. Replaced the `<Pulse label={`Acquisition · ${project.brand_name}`} value={fmtPct(clientShare)} ... />` block (~lines 319–325 of the v1.1.55 file) with a `<Pulse label="Your position" value={fmtPct(clientCiteRate)} ... />` block that reuses the same `clientRank` / `leader` / `runnerUp` derivations already computed at the top of the panel.
+- No data, API, or schema changes — `clientCiteRate` was already being read out of `latest.brands.find(b => b.kind === "client").citation_rate` for the InsightBlock.
+
+### Notes
+- `clientShare` is still computed inside the IIFE that builds the bottom row because the "Citation share" card and the brand-mention math still depend on it. Left untouched.
+- Hard-reload after deploy so the browser fetches the new client bundle.
+
 ## [1.1.55] — 2026-05-23
 
 UI cleanup — the per-project action buttons now live in the global header, and the nav link is more descriptive.

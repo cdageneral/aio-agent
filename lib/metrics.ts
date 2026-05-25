@@ -60,7 +60,12 @@ export interface BrandMetrics {
   citation_rate_organic: number;// aios_acquired_within_organic / total_aios_triggered_organic
   mention_count: number;        // AIOs whose answer text contains the brand name
   mention_rate: number;         // mention_count / total_aios_triggered_market
-}
+  /** v1.1.57: Average best-citation position across AIOs where the brand was cited.
+   *  For each acquired AIO, take the lowest (best) citation slot index the brand
+   *  occupied in that AIO's citation list, then average across all acquired AIOs.
+   *  Same semantics as the per-keyword drilldown's `brand_hits[].position`.
+   *  Null when the brand has zero acquired AIOs (avg is undefined). */
+  avg_citation_position: number | null;
 
 export interface SovSlice {
   label: string;            // brand name OR "Wikipedia" / "Reddit" / "News" / "Other"
@@ -166,6 +171,12 @@ export function computeSnapshotMetrics(
     let aios_acquired_organic = 0;
     let citation_slots = 0;
     let mention_count = 0;
+    // v1.1.57: running sum of best-position-per-acquired-AIO so we can
+    // average at the end. `best_positions_n` is just `aios_acquired` here
+    // (they tick together), but kept separate so the intent reads clearly
+    // in a future skim — "sum / n = mean".
+    let best_position_sum = 0;
+    let best_positions_n = 0;
 
     for (const serp of aioSerps) {
       const cites = citationsBySerpId.get(serp.id) ?? [];
@@ -174,6 +185,16 @@ export function computeSnapshotMetrics(
         aios_acquired += 1;
         citation_slots += owned.length;
         if (serp.source === "organic") aios_acquired_organic += 1;
+        // v1.1.57: pick this AIO's best (lowest) position for the brand and
+        // fold it into the running mean. Mirrors the drilldown route's
+        // `best = owned.sort((a, b) => a.position - b.position)[0]` — same
+        // definition of "best position" the per-keyword table already uses.
+        let best = owned[0].position;
+        for (let i = 1; i < owned.length; i++) {
+          if (owned[i].position < best) best = owned[i].position;
+        }
+        best_position_sum += best;
+        best_positions_n += 1;
       }
       if (serp.aio_text && re.test(serp.aio_text)) {
         mention_count += 1;
@@ -192,6 +213,7 @@ export function computeSnapshotMetrics(
         : 0,
       mention_count,
       mention_rate: total_aios_triggered ? mention_count / total_aios_triggered : 0,
+      avg_citation_position: best_positions_n > 0 ? best_position_sum / best_positions_n : null,
     };
   });
 

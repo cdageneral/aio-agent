@@ -315,13 +315,25 @@ export default function StoryPanel({
                 normal weight, since they're context to the SERP-level story.
                 Acquisition · {client} mirrors Top brand · {leader} so the two
                 read as a direct head-to-head comparison. */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mt-3">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mt-3">
+              {/* v1.1.56: "Acquisition · {brand}" card replaced with a "Your
+                  position" card at user request. The Acquisition card was
+                  showing aios_acquired / total_keywords (clientShare) — the
+                  same number rendered in the "Citation share" card to its
+                  right, so it was duplicating that slot. Your position uses
+                  client.citation_rate, which is the leader-vs-field metric
+                  also surfaced in the Executive Summary InsightBlock above;
+                  we kept the InsightBlock intact per the user's instruction. */}
               <Pulse
-                label={`Acquisition · ${project.brand_name}`}
-                value={fmtPct(clientShare)}
-                sub={clientRank === 1 ? "you lead the field" : `you're ${ordinal(clientRank)} of ${ranked.length}`}
+                label="Your position"
+                value={fmtPct(clientCiteRate)}
+                sub={
+                  clientRank === 1
+                    ? `${project.brand_name} leads${runnerUp ? ` — ${runnerUp.brand_name} ${fmtPct(runnerUp.citation_rate)}` : ""}`
+                    : `${ordinal(clientRank)} behind ${leader.brand_name} (${fmtPct(leader.citation_rate)})`
+                }
                 accent="blue"
-                explanation={`${project.brand_name}'s AIO acquisition rate — the percentage of tracked queries where your domain is cited as a source inside the AI Overview. Uses the same formula as the Top Brand card so you can compare side by side: the gap between this number and Top Brand's number is the ground you need to make up. When you ARE the top brand, the two cards converge.`}
+                explanation={`${project.brand_name}'s citation rate across the AIOs that fired in this snapshot — the share of AI Overviews where your domain appears as a cited source. This is the leader-vs-field metric: when your rank is #1, the card calls out the runner-up's rate so you can see how big your lead is; when you're behind, it names the brand ahead of you and shows their rate so the gap is immediate.`}
               />
               <Pulse
                 label="Brand mentions"
@@ -337,6 +349,30 @@ export default function StoryPanel({
                 accent="blue"
                 explanation="The percentage of your tracked queries where your domain was cited as a source inside the AI Overview. Same number as the Acquisition card on the left — this is the generic/template framing for the same metric. Most brands land in the 5–25% range. Above 50% is exceptional and means you're dominating your category."
               />
+              {/* v1.1.57: Avg citation position. Averages, across every AIO
+                  where the client was cited, the client's best (lowest)
+                  citation slot index in that AIO's citation list. Same
+                  "best position" definition the keyword drilldown uses for
+                  the position column. Lower is better; "1.0" = always the
+                  very first cited source. Bottom row was bumped from 5 to
+                  6 columns to accommodate this card. */}
+              {(() => {
+                const avgPos = client?.avg_citation_position ?? null;
+                const acquired = client?.aios_acquired ?? 0;
+                return (
+                  <Pulse
+                    label="Avg citation position"
+                    value={avgPos != null ? avgPos.toFixed(1) : "—"}
+                    sub={
+                      avgPos == null
+                        ? "no citations yet"
+                        : `across ${acquired.toLocaleString()} cited AIO${acquired === 1 ? "" : "s"}`
+                    }
+                    accent="cyan"
+                    explanation={`The average citation slot ${project.brand_name} occupies inside the AI Overview, taken across only the AIOs where you were cited. For each cited AIO we use your best (lowest) slot in that AIO's citation list — same definition the per-keyword drilldown's "position" column uses — then we average those values. Lower is better: a value of 1.0 means you're always the very first cited source; 4.5 means on average you sit in the bottom half of a typical 5-citation AIO. Watch this number trend down over time as your AIO authority improves.`}
+                  />
+                );
+              })()}
               <Pulse
                 label={`Top brand · ${topBrand?.brand_name ?? "—"}`}
                 value={fmtPct(topBrandShare)}
