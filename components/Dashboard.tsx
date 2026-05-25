@@ -396,12 +396,43 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     if (typeof navigator === "undefined") return;
     const proj = data?.project;
     const regionLbl = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
-    const prompt = buildPptPrompt(data?.latest ?? null, {
-      brand_name: proj?.brand_name ?? "—",
-      client_url: proj?.client_url ?? "—",
-      region_label: regionLbl,
-      universe_label: proj?.segment_l3 ?? proj?.segment_l2 ?? proj?.segment_l1 ?? undefined,
-    });
+
+    // v1.1.62: the prompt builder now emits THREE slides. Slide 3 (keyword
+    // drilldown + AIO examples) needs row-level data that isn't in the
+    // metrics payload, so fetch /keywords/detail before assembling. Use the
+    // same region/kind scope the dashboard is currently rendering so the
+    // numbers on slide 3 match what the stakeholder is looking at. If the
+    // fetch fails (network, no snapshot yet, etc.) we still build the
+    // prompt — the builder gracefully skips slide 3 when keywords are null.
+    let keywords: any[] | null = null;
+    try {
+      const params = new URLSearchParams({
+        region: region === "us" ? "us" : region === "ca" ? "ca" : "us,ca",
+      });
+      if (kindFilter !== "all") params.set("kind", kindFilter);
+      params.set("_", Date.now().toString());
+      const res = await fetch(
+        `/api/projects/${projectId}/keywords/detail?${params.toString()}`,
+        { cache: "no-store" },
+      );
+      if (res.ok) {
+        const j = await res.json();
+        keywords = Array.isArray(j?.keywords) ? j.keywords : null;
+      }
+    } catch (e) {
+      console.warn("PPT prompt: keyword detail fetch failed — slide 3 will be skipped", e);
+    }
+
+    const prompt = buildPptPrompt(
+      data?.latest ?? null,
+      {
+        brand_name: proj?.brand_name ?? "—",
+        client_url: proj?.client_url ?? "—",
+        region_label: regionLbl,
+        universe_label: proj?.segment_l3 ?? proj?.segment_l2 ?? proj?.segment_l1 ?? undefined,
+      },
+      keywords,
+    );
     try {
       if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(prompt);
@@ -421,7 +452,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     } catch (e) {
       console.error("PPT prompt copy failed", e);
     }
-  }, [data, region]);
+  }, [data, region, projectId, kindFilter]);
 
   // Push current handlers + state into the global header store on every
   // change that matters. Cleared on unmount so the buttons disappear when

@@ -48,7 +48,7 @@ export default function HeaderActions() {
         }}
         title={
           actions.hasMetrics
-            ? "Copy a slide-generation prompt for AIO Landscape + Cluster Opportunity Map. Paste into Claude/Copilot/ChatGPT inside PowerPoint."
+            ? "Copy a slide-generation prompt for 3 slides — AIO Landscape, Cluster Opportunity Map, and Keyword-Level Opportunity + AIO Drill-Down. Paste into Claude/Copilot/ChatGPT inside PowerPoint."
             : "Run a refresh first — there's no snapshot data to build a prompt from yet."
         }
       >

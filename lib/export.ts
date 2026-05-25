@@ -358,15 +358,31 @@ function drawPageFooter(doc: any, brand: string): void {
 // v1.1.33: Generates a long-form natural-language prompt the user can paste
 // into Claude/ChatGPT/Copilot inside PowerPoint. The receiving AI is told to
 // match the style of whatever deck the user currently has open, and is given
-// every concrete number it needs to fill in two slides identical in
-// information density to the reference layouts:
+// every concrete number it needs to fill the reference layouts.
 //
-//   Slide A — "AIO landscape" — KPI strip + share of voice + top non-brand domains
-//   Slide B — "AIO opportunity map" — 3 summary cards + cluster grid
+// v1.1.62: bumped from a 2-slide prompt to a 3-slide prompt so a single paste
+// produces the full executive AIO storyboard:
 //
-// The function is pure: pass in the SnapshotMetrics-shaped `latest` payload
-// (plus a small context object) and it returns a string. The caller is
-// responsible for getting it onto the clipboard.
+//   Slide 1 — "AIO landscape" — 2 hero KPI cards on top + the 6-card metric
+//             strip from the StoryPanel (Your position · Brand mentions ·
+//             Citation share · Avg citation position · Top brand · Others).
+//   Slide 2 — "AIO opportunity map" — 3 cluster-summary cards on top + the
+//             full cluster grid (LEAD/TRAIL/OPEN).
+//   Slide 3 — "Keyword-level opportunity & AIO drill-down" — split layout:
+//             left column = top 17 keywords (mixed wins + losses, highest
+//             citation-count first) with cluster, citation count, top brand,
+//             and client status. Right column = two real AIO examples — one
+//             where the client is cited (best win, highlight the rank) and
+//             one where the client is missing (worst miss, show competitor
+//             citations) — both with the AIO answer text + citation list.
+//
+// The function is pure: pass in the SnapshotMetrics-shaped `latest` payload,
+// the optional keyword-detail rows from /api/projects/[id]/keywords/detail
+// (needed for slide 3), and a small context object — and it returns a string.
+// The caller is responsible for getting it onto the clipboard. When the
+// keyword-detail rows are omitted (e.g. an older caller that only fetched
+// metrics), slide 3 emits a fallback line telling the receiving AI to skip
+// it; slides 1 and 2 are unchanged. This keeps any legacy invocation safe.
 
 export interface PptPromptContext {
   brand_name: string;
@@ -393,6 +409,9 @@ interface PptPromptLatest {
     mention_count?: number;
     mention_rate?: number;
     aios_acquired?: number;
+    /** v1.1.57: best-position-averaged-across-cited-AIOs. Surfaced as a
+     *  pulse card on the dashboard; included in slide 1 KPI strip. */
+    avg_citation_position?: number | null;
   }>;
   share_of_voice?: Array<{
     label: string;
@@ -412,6 +431,33 @@ interface PptPromptLatest {
   }>;
 }
 
+/** v1.1.62: shape of the keyword-detail rows the Dashboard fetches from
+ *  /api/projects/[id]/keywords/detail. We accept only the fields slide 3
+ *  needs — the route returns more (full citation objects with titles, etc.)
+ *  but the prompt only quotes a couple of those rows back at the receiving
+ *  AI, so we keep the surface tight. */
+export interface PptPromptKeywordRow {
+  keyword: string;
+  country: string;
+  cluster_label?: string | null;
+  has_aio: boolean;
+  aio_text?: string | null;
+  citations?: Array<{
+    position: number;
+    domain: string;
+    url?: string;
+    title?: string | null;
+  }>;
+  brand_hits?: Array<{
+    brand_name: string;
+    kind: "client" | "competitor";
+    cited: boolean;
+    position: number | null;
+    mentioned?: boolean;
+  }>;
+  winner?: { brand_name: string; position: number | null; kind: string } | null;
+}
+
 function pct(n: number | undefined, digits = 1): string {
   if (n == null || isNaN(n)) return "0%";
   return `${(n * 100).toFixed(digits)}%`;
@@ -422,7 +468,33 @@ function intFmt(n: number | undefined): string {
   return n.toLocaleString("en-US");
 }
 
-export function buildPptPrompt(latest: PptPromptLatest | null, ctx: PptPromptContext): string {
+/** Truncate AIO answer text for the prompt — full text bloats the clipboard
+ *  payload and the receiving AI only needs the gist to render the example
+ *  panel. 600 chars is long enough to convey the answer's substance but
+ *  short enough that two examples + their citations still fit comfortably. */
+function trimAio(text: string | null | undefined, max = 600): string {
+  if (!text) return "(no AIO text captured)";
+  const t = text.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return t.slice(0, max - 1).trimEnd() + "…";
+}
+
+/** Same ordinal formatter the StoryPanel uses ("1st", "2nd", "3rd", …) so
+ *  the slide-1 "Your position" subtitle reads the same as the pulse card. */
+function ordinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+export function buildPptPrompt(
+  latest: PptPromptLatest | null,
+  ctx: PptPromptContext,
+  /** v1.1.62: keyword-detail rows from /api/projects/[id]/keywords/detail.
+   *  Optional so older callers that only fetched metrics still get the first
+   *  two slides correctly; slide 3 gracefully degrades when this is omitted. */
+  keywords: PptPromptKeywordRow[] | null = null,
+): string {
   const brand = ctx.brand_name;
   const universe = ctx.universe_label ? ` (${ctx.universe_label})` : "";
   const generated = ctx.generated_at ?? new Date().toISOString();
@@ -443,11 +515,18 @@ export function buildPptPrompt(latest: PptPromptLatest | null, ctx: PptPromptCon
 
   // Pull client brand metrics
   const clientBrand = latest.brands?.find((b) => b.kind === "client");
-  const competitorBrands = (latest.brands ?? []).filter((b) => b.kind === "competitor");
   const clientCitationRate = clientBrand?.citation_rate ?? 0;
   const clientMentionRate = clientBrand?.mention_rate ?? 0;
   const clientMentions = clientBrand?.mention_count ?? 0;
   const clientSlots = clientBrand?.citation_slots ?? 0;
+  const clientAcquired = clientBrand?.aios_acquired ?? 0;
+  const clientAvgPos = clientBrand?.avg_citation_position ?? null;
+  // v1.1.62: "Citation share" pulse card uses aios_acquired / total_keywords
+  // (NOT citation_slots / total_citation_slots). Mirror that exact formula so
+  // slide 1's "Citation share" KPI equals what the dashboard pulse shows.
+  const citationShareRate = totalKw > 0 ? clientAcquired / totalKw : 0;
+  // "Brand mentions" pulse card uses mention_count / total_keywords too.
+  const brandMentionShareRate = totalKw > 0 ? clientMentions / totalKw : 0;
 
   // Top brand (by citation_rate, excluding any with 0)
   const allBrandsSorted = [...(latest.brands ?? [])].sort(
@@ -455,19 +534,26 @@ export function buildPptPrompt(latest: PptPromptLatest | null, ctx: PptPromptCon
   );
   const topBrand = allBrandsSorted[0];
   const topBrandIsClient = topBrand?.kind === "client";
+  const topBrandShare = totalKw && topBrand
+    ? (topBrand.aios_acquired ?? 0) / totalKw
+    : 0;
+  // The "runner up" subtitle on the "Your position" pulse card.
+  const runnerUp = topBrandIsClient ? allBrandsSorted[1] : null;
+  // Rank inside the brand-by-citation-rate ordering for the "Your position"
+  // subtitle. "Nth behind X (Y%)" when client isn't the top brand.
+  const clientPositionRank = allBrandsSorted.findIndex((b) => b.kind === "client") + 1;
 
-  // Brand-only share of voice rank for the client
+  // Brand-only share of voice rank for the client (used for slide-1 footer
+  // context — distinct from the "Your position" rank above because SoV uses
+  // citation slot counts, not citation rate).
   const trackedSov = (latest.share_of_voice ?? []).filter((s) => s.kind !== "bucket");
   const trackedSovSorted = [...trackedSov].sort((a, b) => b.slots - a.slots);
-  const clientRank = trackedSovSorted.findIndex((s) => s.label === brand) + 1;
 
-  // Non-brand share (sum of bucket slices)
-  const nonBrandShare = (latest.share_of_voice ?? [])
+  // "Others" pulse card = non-tracked citation slots / total citation slots.
+  const otherSlots = (latest.share_of_voice ?? [])
     .filter((s) => s.kind === "bucket")
-    .reduce((acc, s) => acc + s.share, 0);
-
-  // Top non-brand domains (raw count of AIOs each appears in)
-  const topDomains = (latest.other_domains ?? []).slice(0, 8);
+    .reduce((acc, s) => acc + (s.slots ?? 0), 0);
+  const othersShare = totalSlots > 0 ? otherSlots / totalSlots : 0;
 
   // Cluster slicing
   const clusters = latest.clusters ?? [];
@@ -484,31 +570,38 @@ export function buildPptPrompt(latest: PptPromptLatest | null, ctx: PptPromptCon
   const topTrailingCompetitor = [...trailWinnerCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
   const trailExamples = trailClusters.slice(0, 2).map((c) => c.name).join(" & ");
 
-  // Lines
+  // ── Slide-1 KPI lines ──────────────────────────────────────────────────
+  // Two hero cards on top + six metric cards below them. The six match the
+  // app's bottom-row pulse strip EXACTLY (Your position · Brand mentions ·
+  // Citation share · Avg citation position · Top brand · Others) so a
+  // stakeholder looking at the slide can read it side-by-side with the
+  // dashboard and confirm the numbers tie out.
 
-  const kpiLines = [
-    `1. AVAILABLE AIOs — number: ${intFmt(totalAios)} — caption: "AI Overviews across ${intFmt(totalKw)} tracked queries"`,
-    `2. AIO PENETRATION IN SERP — number: ${pct(penetration)} — caption: "${intFmt(totalAios)} of ${intFmt(totalKw)} queries trigger an AIO"`,
-    `3. ACQUISITION — number: ${pct(clientCitationRate)} — caption: "${brand} ${topBrandIsClient ? "leads the field" : `trails ${topBrand?.brand_name ?? "competitors"}`}"`,
-    `4. BRAND MENTIONS — number: ${pct(clientMentionRate)} — caption: "${intFmt(clientMentions)} of ${intFmt(totalKw)} mentions"`,
-    `5. CITATION SHARE — number: ${pct(clientSlots && totalSlots ? clientSlots / totalSlots : 0)} — caption: "${intFmt(clientSlots)} of ${intFmt(totalSlots)} citations"`,
-    `6. TOP BRAND — number: ${pct(topBrand?.citation_rate ?? 0)} — caption: "${topBrand?.brand_name ?? "—"} ranks #1"`,
-    `7. OTHERS — number: ${pct(nonBrandShare)} — caption: "non-brand share"`,
+  const yourPositionSubtitle = topBrandIsClient && runnerUp
+    ? `${brand} leads — ${runnerUp.brand_name} ${pct(runnerUp.citation_rate ?? 0)}`
+    : topBrandIsClient
+      ? `${brand} leads the field`
+      : clientPositionRank > 0 && topBrand
+        ? `${ordinal(clientPositionRank)} behind ${topBrand.brand_name} (${pct(topBrand.citation_rate ?? 0)})`
+        : `not yet ranked`;
+
+  const topBrandSubtitle = topBrandIsClient ? "you lead" : "leads the field";
+
+  const heroKpiLines = [
+    `1. AVAILABLE AIOs — big number: ${intFmt(totalAios)} — caption: "AI Overviews across ${intFmt(totalKw)} tracked queries" — accent: cyan/positive · EMPHASIZED tile (larger, glow border)`,
+    `2. AIO PENETRATION — big number: ${pct(penetration)} — caption: "${intFmt(totalAios)} of ${intFmt(totalKw)} queries trigger an AIO" — accent: cyan/positive · EMPHASIZED tile (larger, glow border)`,
   ].join("\n");
 
-  const sovBrandLines = trackedSovSorted.map((s) => {
-    const isClient = s.label === brand;
-    return `  - ${s.label}${isClient ? " (highlight as YOU)" : ""}: ${pct(s.share)} · ${intFmt(s.slots)} slots`;
-  }).join("\n");
+  const metricKpiLines = [
+    `1. YOUR POSITION — number: ${pct(clientCitationRate)} — caption: "${yourPositionSubtitle}" — accent: blue`,
+    `2. BRAND MENTIONS — number: ${pct(brandMentionShareRate)} — caption: "${intFmt(clientMentions)} of ${intFmt(totalKw)} brand mentions" — accent: lime/green`,
+    `3. CITATION SHARE — number: ${pct(citationShareRate)} — caption: "${intFmt(clientAcquired)} of ${intFmt(totalKw)} citations" — accent: blue`,
+    `4. AVG CITATION POSITION — number: ${clientAvgPos != null ? clientAvgPos.toFixed(1) : "—"} — caption: "${clientAvgPos == null ? "no citations yet" : `across ${intFmt(clientAcquired)} cited AIO${clientAcquired === 1 ? "" : "s"}`}" — accent: cyan · note: LOWER is better, 1.0 = first cited source`,
+    `5. TOP BRAND · ${topBrand?.brand_name ?? "—"} — number: ${pct(topBrandShare)} — caption: "${topBrandSubtitle}" — accent: pink`,
+    `6. OTHERS — number: ${pct(othersShare)} — caption: "non-tracked sources (Wikipedia, Reddit, news, etc.)" — accent: amber`,
+  ].join("\n");
 
-  const sovBucketLines = (latest.share_of_voice ?? [])
-    .filter((s) => s.kind === "bucket")
-    .sort((a, b) => b.slots - a.slots)
-    .map((s) => `  - ${s.label}: ${pct(s.share)} · ${intFmt(s.slots)} slots`)
-    .join("\n");
-
-  const domainLines = topDomains.map((d) => `  - ${d.domain}: ${intFmt(d.count)} AIOs`).join("\n");
-
+  // ── Slide-2 cluster grid lines ─────────────────────────────────────────
   const clusterLines = clusters.map((c, i) => {
     let status: "LEAD" | "TRAIL" | "OPEN";
     let caption: string;
@@ -530,7 +623,111 @@ export function buildPptPrompt(latest: PptPromptLatest | null, ctx: PptPromptCon
     ].join("\n");
   }).join("\n");
 
-  // Insight line for the orange "THE READ" callout on slide 2
+  const trailSubtitle = topTrailingCompetitor && trailExamples
+    ? `${topTrailingCompetitor} owns ${trailExamples}`
+    : trailClusters.length === 0
+      ? "no clusters trailing"
+      : "competitors lead";
+
+  // ── Slide-3 keyword + drilldown lines ──────────────────────────────────
+  //
+  // Selection logic (per user spec): "Mixed: highest-priority wins +
+  // losses". We bucket the AIO-triggered keywords by client status, sort
+  // each bucket by citation count desc (the visible "CITES" column from the
+  // app), then interleave wins and losses until we have 17 rows. This gives
+  // a balanced executive view — biggest wins next to biggest open holes —
+  // instead of e.g. an all-wins or all-losses ranking that doesn't reflect
+  // the actual gap conversation. Mentions-only and "no AIO" rows are
+  // excluded because the slide is meant to surface the actionable list, not
+  // the long tail.
+  const aioKeywords = (keywords ?? []).filter((k) => k.has_aio);
+  const winRows = aioKeywords
+    .filter((k) => (k.brand_hits ?? []).some((b) => b.kind === "client" && b.cited))
+    .sort((a, b) => (b.citations?.length ?? 0) - (a.citations?.length ?? 0));
+  const lossRows = aioKeywords
+    .filter((k) => !(k.brand_hits ?? []).some((b) => b.kind === "client" && b.cited))
+    .sort((a, b) => (b.citations?.length ?? 0) - (a.citations?.length ?? 0));
+
+  const TOP_N = 17;
+  const interleaved: PptPromptKeywordRow[] = [];
+  for (let i = 0; interleaved.length < TOP_N && (winRows[i] || lossRows[i]); i++) {
+    if (winRows[i]) interleaved.push(winRows[i]);
+    if (interleaved.length >= TOP_N) break;
+    if (lossRows[i]) interleaved.push(lossRows[i]);
+  }
+  // Backfill from whichever bucket still has rows, in case one side is short
+  // (e.g. an all-wins universe or an all-losses one).
+  if (interleaved.length < TOP_N) {
+    const remaining = (winRows.length >= lossRows.length ? winRows : lossRows).slice(
+      Math.ceil(interleaved.length / 2),
+    );
+    for (const r of remaining) {
+      if (interleaved.length >= TOP_N) break;
+      if (!interleaved.includes(r)) interleaved.push(r);
+    }
+  }
+  const top17 = interleaved.slice(0, TOP_N);
+
+  function rowStatus(k: PptPromptKeywordRow): { status: string; chipLabel: string } {
+    const ch = (k.brand_hits ?? []).find((b) => b.kind === "client");
+    if (ch?.cited) return { status: `#${ch.position}`, chipLabel: `CHIP #${ch.position}` };
+    if (ch?.mentioned) return { status: "mentioned", chipLabel: "MENTION" };
+    return { status: "missing", chipLabel: "MISSING" };
+  }
+
+  const top17Lines = top17.length === 0
+    ? `  (no AIO-triggered keywords yet — run a refresh)`
+    : top17.map((k, i) => {
+        const winner = k.winner?.brand_name ?? "—";
+        const cites = k.citations?.length ?? 0;
+        const { status, chipLabel } = rowStatus(k);
+        return [
+          `${(i + 1).toString().padStart(2, " ")}. "${k.keyword}"`,
+          `    - cluster: ${k.cluster_label ?? "—"}`,
+          `    - cites: ${cites}  ·  top brand: ${winner}  ·  ${brand} status: ${status} (chip label: ${chipLabel})`,
+        ].join("\n");
+      }).join("\n");
+
+  // Pick the best win = highest CHIP rank (lowest position number) tie-broken
+  // by most citations, and the worst miss = highest citation count where
+  // CHIP is missing (most visible gap).
+  const bestWin = winRows.length
+    ? [...winRows].sort((a, b) => {
+        const ap = (a.brand_hits ?? []).find((x) => x.kind === "client")?.position ?? 99;
+        const bp = (b.brand_hits ?? []).find((x) => x.kind === "client")?.position ?? 99;
+        if (ap !== bp) return ap - bp;
+        return (b.citations?.length ?? 0) - (a.citations?.length ?? 0);
+      })[0]
+    : null;
+  const worstMiss = lossRows[0] ?? null;
+
+  function renderDrilldown(label: string, k: PptPromptKeywordRow | null, kind: "win" | "miss"): string {
+    if (!k) {
+      return `${label}: (no ${kind === "win" ? "wins" : "misses"} in this snapshot)`;
+    }
+    const ch = (k.brand_hits ?? []).find((b) => b.kind === "client");
+    const headerChip = kind === "win"
+      ? `CHIP CITED — RANK #${ch?.position ?? "?"}`
+      : `CHIP MISSING — gap to close`;
+    const citationList = (k.citations ?? []).slice(0, 5).map((c, i) => {
+      const isClient = (k.brand_hits ?? []).some(
+        (b) => b.kind === "client" && b.cited && b.position === c.position,
+      );
+      const star = isClient ? " ★ CHIP" : "";
+      const title = c.title ? `"${c.title}"` : c.url ?? "(no title)";
+      return `    #${c.position}  ${c.domain}  —  ${title}${star}`;
+    }).join("\n");
+    return [
+      `${label}:`,
+      `  AIO QUERY: "${k.keyword}"  (cluster: ${k.cluster_label ?? "—"})`,
+      `  HEADER CHIP: ${headerChip}  ·  accent: ${kind === "win" ? "positive/green" : "negative/red"}`,
+      `  AIO ANSWER TEXT (paraphrase if needed for length): "${trimAio(k.aio_text)}"`,
+      `  CITATIONS (top ${Math.min(5, (k.citations ?? []).length)} of ${(k.citations ?? []).length}):`,
+      citationList || `    (no citations captured)`,
+    ].join("\n");
+  }
+
+  // ── Insight callout for slide 2 ────────────────────────────────────────
   const insight = (() => {
     if (clusters.length === 0) return `Clusters haven't been generated for this snapshot yet — run a cluster pass first.`;
     const avgLead = leadClusters.length > 0
@@ -545,27 +742,72 @@ export function buildPptPrompt(latest: PptPromptLatest | null, ctx: PptPromptCon
     return `Cluster picture is wide open — ${openClusters.length} of ${clusters.length} have no winner yet.`;
   })();
 
-  const trailSubtitle = topTrailingCompetitor && trailExamples
-    ? `${topTrailingCompetitor} owns ${trailExamples}`
-    : trailClusters.length === 0
-      ? "no clusters trailing"
-      : "competitors lead";
+  // ── Slide-3 fallback when keyword detail wasn't fetched ────────────────
+  const slide3Available = top17.length > 0;
+  const slide3Section = slide3Available
+    ? `────────────────────────────────────────────────────────────
+SLIDE 3 — "Keyword-level opportunity & AIO drill-down"
+────────────────────────────────────────────────────────────
+TITLE: Keyword-level opportunity — what we win, where we lose
+SUBTITLE: ${winRows.length} won · ${lossRows.length} missing · top 17 by citation volume, interleaved wins + losses
+
+TWO-COLUMN LAYOUT (≈58% left / 42% right).
+
+LEFT COLUMN — "KEYWORD-LEVEL OPPORTUNITY" data table:
+  - Header eyebrow (small uppercase, orange/accent): "KEYWORD-LEVEL OPPORTUNITY"
+  - Section title (large): "What we win, where we lose, and what's open"
+  - Table columns: KEYWORD · CLUSTER · CITES · TOP BRAND · ${brand.toUpperCase()}
+  - Status chip color rules for the final column:
+      · Green pill "#N" when ${brand} is cited (lower N = better)
+      · Orange pill "MENTION" when mentioned but not cited
+      · Red pill "MISSING" when ${brand} is absent
+  - Row data (top 17, in this exact order):
+${top17Lines}
+  - Footer line under the table (small, muted): "Subset of full keyword list. Full list available upon request."
+
+RIGHT COLUMN — "AIO DRILL-DOWN · What the AI Overview actually shows":
+  - Header eyebrow (small uppercase, orange/accent): "AIO DRILL-DOWN"
+  - Section title (large): "What the AI Overview actually shows"
+  - Stack two example panels vertically. Each panel has its own header chip
+    in the top-right corner (green for the win, red for the miss).
+
+  EXAMPLE 1 — BEST WIN (panel border-top: green accent line):
+${renderDrilldown("    PANEL", bestWin, "win")}
+    HIGHLIGHT: The ★ CHIP row in the citations list is the row to bold —
+    make it visually unmistakable that ${brand} owns rank #${(bestWin?.brand_hits ?? []).find((b) => b.kind === "client")?.position ?? "?"} in this AIO.
+
+  EXAMPLE 2 — WORST MISS (panel border-top: red accent line):
+${renderDrilldown("    PANEL", worstMiss, "miss")}
+    HIGHLIGHT: Add a one-line caption under the citations list reading
+    "CHIP is absent — competitors own all ${(worstMiss?.citations ?? []).length} citation slots."
+
+FOOTER on slide: "Source: ${brand} AIO crawl, ${ctx.universe_label ? ctx.universe_label + " " : ""}keyword universe (${intFmt(totalKw)} queries), ${stampHuman}. Top 17 selected by citation volume, interleaving wins and losses for balance."
+`
+    : `────────────────────────────────────────────────────────────
+SLIDE 3 — "Keyword-level opportunity & AIO drill-down"
+────────────────────────────────────────────────────────────
+SKIP THIS SLIDE — no keyword-detail data was passed to the prompt builder
+(${keywords == null ? "the keywords parameter was null" : "no AIO-triggered keywords in scope"}).
+Re-trigger Copy PPT Prompt after a successful refresh that includes a
+keyword detail fetch.
+`;
 
   // Final assembled prompt
   return `# PowerPoint slide-generation prompt — AIO Coverage Tracker
 # Brand: ${brand}${universe} · Region: ${ctx.region_label} · Generated: ${stampHuman}
 
-You are generating two PowerPoint slides inside the deck I currently have open.
+You are generating three PowerPoint slides inside the deck I currently have open.
 
 ────────────────────────────────────────────────────────────
-STYLE INSTRUCTIONS (READ FIRST)
+STYLE INSTRUCTIONS (READ FIRST — APPLY TO ALL THREE SLIDES)
 ────────────────────────────────────────────────────────────
-- MATCH THE ACTIVE DECK. Infer typography, color palette, header/banner treatment, accent colors, card styles, and spacing from the master slide and existing slides in this deck. Do NOT introduce colors or fonts that aren't already present in the deck's theme.
-- Reuse the deck's existing title-bar / header style for both slides.
-- Use the deck's primary heading font for big numbers, secondary font for captions.
-- If the deck uses status colors (positive / negative / neutral), use those for LEAD / TRAIL / OPEN respectively. If not, use green / red / gray as a fallback.
-- Information density should be HIGH but legible — these are executive reference slides, not minimalist hero slides. Use thin colored accent bars above KPI tiles to organize the eye.
-- Both slides are 16:9. Use the deck's standard margin/safe-area.
+- MATCH THE ACTIVE DECK. Infer typography, color palette, header/banner treatment, accent colors, card styles, spacing, and margins from the master slide and existing slides in this deck. Do NOT introduce colors or fonts that aren't already in the deck's theme.
+- Reuse the deck's existing title-bar / header style for all three slides so they feel like a single insert, not three different templates.
+- Use the deck's primary heading font for big numbers, secondary font for labels and captions.
+- If the deck uses status colors (positive / negative / neutral), use those for LEAD / TRAIL / OPEN respectively and for CHIP WIN / CHIP MISS on slide 3. If not, use green / red / gray as a fallback.
+- Information density should be HIGH but legible — these are executive reference slides, not minimalist hero slides. Use thin colored accent bars above each KPI tile and panel to organize the eye (the orange divider style in the source dashboard works well).
+- All three slides are 16:9. Use the deck's standard margin/safe-area.
+- Numbers must match EXACTLY as given below — do not round differently or recalculate.
 
 ────────────────────────────────────────────────────────────
 SLIDE 1 — "AIO landscape${universe ? ` —${universe.replace(/[()]/g, "")} keyword set` : ""}"
@@ -573,30 +815,16 @@ SLIDE 1 — "AIO landscape${universe ? ` —${universe.replace(/[()]/g, "")} key
 TITLE: AIO landscape${universe ? ` —${universe.replace(/[()]/g, "")} keyword set` : ` — ${brand} keyword set`}
 SUBTITLE: ${intFmt(totalAios)} AI Overviews across ${intFmt(totalKw)} tracked queries · ${intFmt(totalSlots)} citation slots · who Google trusts vs. who's invisible
 
-TOP REGION — KPI ROW (7 stat cards in a single horizontal strip, each with a thin colored accent bar above the label):
-${kpiLines}
+ROW 1 — Two large hero KPI cards, side-by-side, spanning the full slide width:
+${heroKpiLines}
 
-BOTTOM REGION — Three columns:
-
-LEFT COLUMN — Featured highlight tile titled "${brand.toUpperCase()}":
-  - Big number: ${pct(clientSlots && totalSlots ? clientSlots / totalSlots : 0)}
-  - Sublabel: "of all citations"
-  - Detail line: "${intFmt(clientSlots)} slots / ${intFmt(totalSlots)}"
-  - Footer line: "${clientRank > 0 ? `Ranks #${clientRank} brand-only` : "Not yet ranked"}"
-
-MIDDLE COLUMN — "CITATION SHARE BY BRAND" horizontal bar chart:
-  Brand bars (in order, longest first):
-${sovBrandLines || "  (no tracked brand citations yet)"}
-  Divider labeled "NON-BRAND", then bucket bars:
-${sovBucketLines || "  (no non-brand citations yet)"}
-
-RIGHT COLUMN — "TOP NON-BRAND DOMAINS · WHO GOOGLE TRUSTS" horizontal bar chart:
-${domainLines || "  (no non-brand domains yet)"}
+ROW 2 — Six metric cards in a single horizontal strip directly below the hero row (each with a thin colored accent bar above the label):
+${metricKpiLines}
 
 FOOTER on slide: "Source: ${brand} AIO crawl, ${ctx.universe_label ? ctx.universe_label + " " : ""}keyword universe (${intFmt(totalKw)} queries), ${stampHuman}. Citation slots = distinct domains cited per AIO, summed across all ${intFmt(totalAios)} AIOs."
 
 ────────────────────────────────────────────────────────────
-SLIDE 2 — "AIO opportunity map — ${clusters.length} ${ctx.universe_label ?? brand} clusters"
+SLIDE 2 — "AIO opportunity map — ${clusters.length} ${ctx.universe_label ?? brand} cluster${clusters.length === 1 ? "" : "s"}"
 ────────────────────────────────────────────────────────────
 TITLE: AIO opportunity map — ${clusters.length} ${ctx.universe_label ?? brand} cluster${clusters.length === 1 ? "" : "s"}
 SUBTITLE: Where ${brand} is already winning AIO citations · where competitors lead · where the whole category is wide open
@@ -618,11 +846,13 @@ ${clusterLines || "  (no clusters yet — run a cluster pass first)"}
 ORANGE CALLOUT STRIP at the bottom of slide 2, labeled "THE READ":
 "${insight}"
 
+${slide3Section}
 ────────────────────────────────────────────────────────────
 FINAL REMINDERS
 ────────────────────────────────────────────────────────────
 - Numbers must match exactly as given above — do not round differently or recalculate.
 - LEAD = positive color, TRAIL = negative color, OPEN = neutral/muted.
-- Keep both slides on the deck's master so they pick up any future theme changes automatically.
+- On slide 3, the ★ CHIP row in the BEST WIN citations list MUST be visually distinct (bold + accent color) so the rank is unmistakable.
+- Keep all three slides on the deck's master so they pick up any future theme changes automatically.
 - After generating, briefly confirm in chat which slide layout/master you applied so I can verify.`;
 }
