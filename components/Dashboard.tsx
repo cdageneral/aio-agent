@@ -215,17 +215,27 @@ export default function Dashboard({ projectId }: { projectId: string }) {
       // v1.1.63: chunked refresh. Split the keyword universe into batches of
       // CHUNK_SIZE so each HTTP call completes in ~15–20 s (well inside any
       // proxy or Vercel timeout), then stitch them all into a single snapshot.
-      // Falls back gracefully to a single call when keywords_count is unknown.
+      //
+      // CHUNK_SIZE=50 is safe for both Vercel Hobby (60 s) and Pro (300 s):
+      //   50 keywords ÷ 8 workers × ~3 s avg ≈ 19 s per call.
+      // For universes of thousands of keywords the loop simply runs more times —
+      // each call stays fast; total wall time scales linearly with universe size.
+      //
+      // The loop is SERVER-DRIVEN: we keep advancing kwOffset by CHUNK_SIZE and
+      // calling the endpoint until the server responds with is_last_chunk=true.
+      // This means it works correctly for any universe size, even if
+      // keywords_count in the dashboard data is stale, zero, or undefined.
+      // A MAX_CHUNKS safety cap prevents an infinite loop in the event of an
+      // unexpected server-side bug (set to 10,000 / CHUNK_SIZE + headroom).
       const CHUNK_SIZE = 50;
-      const kwCount = data?.keywords_count ?? 0;
-      const totalChunks = kwCount > 0 ? Math.ceil(kwCount / CHUNK_SIZE) : 1;
+      const MAX_CHUNKS = 250; // 250 × 50 = 12,500 keywords — generous ceiling
 
       let snapshotId: string | undefined;
       let totalAios = 0;
       let totalFailed = 0;
+      let kwOffset = 0;
 
-      for (let chunk = 0; chunk < totalChunks; chunk++) {
-        const kwOffset = chunk * CHUNK_SIZE;
+      for (let chunk = 0; chunk < MAX_CHUNKS; chunk++) {
         const chunkBody: Record<string, unknown> = { kwOffset, kwLimit: CHUNK_SIZE };
         if (snapshotId) chunkBody.snapshotId = snapshotId;
 
@@ -257,7 +267,11 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         totalAios = j.total_aios ?? j.aios_triggered ?? 0;
         totalFailed += j.failed ?? 0;
 
+        // Server tells us when we've processed the last keyword — break
+        // regardless of what the client thinks the total count is.
         if (j.is_last_chunk) break;
+
+        kwOffset += CHUNK_SIZE;
       }
 
       setRefreshMsg(`Snapshot saved — ${totalAios} AIO(s) detected${totalFailed ? `, ${totalFailed} errored` : ""}.`);
@@ -692,7 +706,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           <h2 className="h2">What changed</h2>
           <span className="text-xs muted">Snapshot diff · digest-ready summary you can ship to Slack.</span>
         </div>
-        <WhatChangedPanel projectId={projectId} region={region} />
+        <WhatChangedPanel projectId={projectId} region={region} refreshNonce={refreshNonce} />
       </section>
 
       <section className="surface p-5">
