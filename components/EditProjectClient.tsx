@@ -82,29 +82,44 @@ export default function EditProjectClient({ projectId }: { projectId: string }) 
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto" }}>
-      {/* Breadcrumb */}
-      <div style={{ marginBottom: 24, display: "flex", alignItems: "center", gap: 8 }}>
+      {/* Back nav */}
+      <div style={{ marginBottom: 28 }}>
         <Link
           href={`/projects/${projectId}`}
           style={{
             display: "inline-flex",
             alignItems: "center",
-            gap: 6,
+            gap: 8,
             fontSize: 13,
-            color: "var(--muted)",
+            fontWeight: 500,
+            color: "#c4cad8",
             textDecoration: "none",
-            padding: "5px 0",
-            transition: "color 0.12s",
+            padding: "7px 14px",
+            borderRadius: 8,
+            border: "1px solid rgba(255,255,255,0.12)",
+            background: "rgba(255,255,255,0.04)",
+            transition: "background 0.12s, border-color 0.12s, color 0.12s",
           }}
-          className="muted hover:text-white transition"
+          onMouseEnter={e => {
+            (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.08)";
+            (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.22)";
+            (e.currentTarget as HTMLAnchorElement).style.color = "#fff";
+          }}
+          onMouseLeave={e => {
+            (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.04)";
+            (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.12)";
+            (e.currentTarget as HTMLAnchorElement).style.color = "#c4cad8";
+          }}
         >
           <i className="ti ti-arrow-left" style={{ fontSize: 14 }} aria-hidden="true" />
           Back to dashboard
+          {project?.brand_name && (
+            <span style={{ color: "rgba(255,255,255,0.35)", margin: "0 2px" }}>·</span>
+          )}
+          {project?.brand_name && (
+            <span style={{ color: "rgba(255,255,255,0.45)", fontWeight: 400 }}>{project.brand_name}</span>
+          )}
         </Link>
-        <span style={{ color: "var(--muted)", fontSize: 13 }}>·</span>
-        <span style={{ fontSize: 13, color: "var(--muted)" }}>
-          {project?.brand_name ?? "Edit Project"}
-        </span>
       </div>
 
       <h1
