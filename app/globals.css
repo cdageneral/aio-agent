@@ -192,3 +192,107 @@ select.input { appearance: none; background-image: linear-gradient(45deg, transp
 
 /* Spin animation used by the export buttons' loading icon. */
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+/* ---------------------------------------------------------------
+   v1.1.62 — Print mode for the full-report PDF export.
+
+   exportFullReportToPdf flips the report root's
+   `data-aio-export-print` attribute to "true" right before it
+   snapshots each section, then flips it back off when the
+   capture pass is done. The block below repaints the dashboard
+   for a printable white-paper aesthetic during that window:
+
+   - CSS variables get overridden to a light palette, which
+     automatically repaints any component that reads them
+     (`.surface`, `.surface-2`, `.muted`, `.h2`, `.kpi`, plus
+     the table borders in CompetitorTable that read
+     `var(--line)`).
+   - A handful of inline-styled accent fills used by StoryPanel
+     and CitationLandscape are repainted via targeted
+     attribute-style selectors. The exporter's html2canvas
+     `onclone` hook does a second pass on hardcoded hex inline
+     styles that don't show up here.
+   - Body gradient and chart grid colors are tamped down so
+     paper-stock white doesn't have neon haloes.
+
+   Live UI is unaffected — the attribute is only set during
+   export and the cleanup is in a finally block so a failed
+   capture doesn't leave the dashboard repainted.
+   --------------------------------------------------------------- */
+[data-aio-export-print="true"] {
+  --bg: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f7f8fa;
+  --line: rgba(0,0,0,0.10);
+  --line-strong: rgba(0,0,0,0.18);
+  --text: #1a1d24;
+  --muted: #4a5466;
+  --dim: #707a8c;
+
+  /* Accents stay meaningful but step down a notch so they read on
+     paper. The soft variants get a true-alpha-on-white treatment
+     (≈10% opacity) instead of the dark-canvas tuned 14-16%. */
+  --accent-blue-soft: rgba(79,140,255,0.10);
+  --accent-cyan-soft: rgba(37,224,206,0.10);
+  --accent-lime-soft: rgba(120,180,30,0.12);
+  --accent-amber-soft: rgba(255,184,70,0.12);
+  --accent-pink-soft: rgba(255,93,158,0.10);
+  --accent-red-soft: rgba(255,100,100,0.10);
+
+  background: #ffffff !important;
+  color: #1a1d24 !important;
+}
+[data-aio-export-print="true"] .surface,
+[data-aio-export-print="true"] .surface-2 {
+  box-shadow: none !important;
+}
+[data-aio-export-print="true"] .h2 { color: #1a1d24 !important; }
+[data-aio-export-print="true"] .muted { color: #4a5466 !important; }
+[data-aio-export-print="true"] .dim   { color: #707a8c !important; }
+[data-aio-export-print="true"] .kpi-value { color: #1a1d24 !important; }
+[data-aio-export-print="true"] .kpi-label { color: #4a5466 !important; }
+[data-aio-export-print="true"] .kpi-sub   { color: #707a8c !important; }
+[data-aio-export-print="true"] .tag {
+  background: #f1f3f8 !important;
+  color: #4a5466 !important;
+  border-color: rgba(0,0,0,0.08) !important;
+}
+[data-aio-export-print="true"] .tag-accent {
+  background: rgba(79,140,255,0.12) !important;
+  color: #1f4fc4 !important;
+}
+[data-aio-export-print="true"] .tag-pos {
+  background: rgba(80,160,20,0.12) !important;
+  color: #3d7a14 !important;
+}
+[data-aio-export-print="true"] .tag-neg {
+  background: rgba(220,60,60,0.10) !important;
+  color: #b22a2a !important;
+}
+/* Recharts text and gridlines — the chart libs draw dark-mode legends
+   that vanish on white paper. Coerce to print-friendly values. */
+[data-aio-export-print="true"] .recharts-text,
+[data-aio-export-print="true"] .recharts-cartesian-axis-tick-value tspan {
+  fill: #1a1d24 !important;
+}
+[data-aio-export-print="true"] .recharts-cartesian-grid line {
+  stroke: rgba(0,0,0,0.08) !important;
+}
+[data-aio-export-print="true"] .recharts-cartesian-axis line {
+  stroke: rgba(0,0,0,0.25) !important;
+}
+[data-aio-export-print="true"] .recharts-legend-item-text {
+  color: #1a1d24 !important;
+}
+/* Section title strip the exporter injects above each captured panel. */
+[data-aio-export-section-title] {
+  margin: 0 0 14px;
+  padding: 10px 16px;
+  border-left: 4px solid #1f4fc4;
+  background: #f1f4fb;
+  color: #1a1d24;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  border-radius: 4px;
+}

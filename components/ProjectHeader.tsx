@@ -1,16 +1,12 @@
 "use client";
 import { useEffect, useState } from "react";
-import { SuggestedCompetitor } from "./SmartSegmentDetector";
+import SmartSegmentDetector, { SegmentValue, SuggestedCompetitor } from "./SmartSegmentDetector";
 import RegionSelector, { RegionMode, regionsForMode } from "./RegionSelector";
 import { accentBtnStyle } from "./uiStyles";
 
 /**
  * Top-of-dashboard control surface. Hosts the primary client URL input,
- * brand name, and region toggle.
- *
- * v1.1.63: Removed SmartSegmentDetector / "Detect from website" button —
- * market segment auto-detection is no longer surfaced here. Keywords are
- * uploaded at project-creation time via the new project wizard.
+ * brand name, region toggle, and smart segment detector.
  *
  * v1.1.55: The Copy PPT Prompt / Export Full Report / Run refresh buttons
  * previously rendered here have been relocated to the GLOBAL app header
@@ -37,21 +33,46 @@ export default function ProjectHeader({
 }) {
   const [clientUrl, setClientUrl] = useState(project.client_url);
   const [brand, setBrand] = useState(project.brand_name);
+  const [seg, setSeg] = useState<SegmentValue>({
+    l1: project.segment_l1 ?? null,
+    l2: project.segment_l2 ?? null,
+    l3: project.segment_l3 ?? null,
+    primary_product: project.primary_product ?? null,
+    seed_keywords: project.custom_seed_keywords ?? [],
+    confidence: project.detection_confidence ?? null,
+  });
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
   useEffect(() => {
     setClientUrl(project.client_url);
     setBrand(project.brand_name);
-  }, [project.id, project.client_url, project.brand_name]);
+    setSeg({
+      l1: project.segment_l1 ?? null,
+      l2: project.segment_l2 ?? null,
+      l3: project.segment_l3 ?? null,
+      primary_product: project.primary_product ?? null,
+      seed_keywords: project.custom_seed_keywords ?? [],
+      confidence: project.detection_confidence ?? null,
+    });
+  }, [project.id, project.client_url, project.brand_name, project.segment_l1, project.segment_l2, project.segment_l3, project.primary_product]);
 
   const persistedRegionsCSV = (project.regions ?? ["us"]).slice().sort().join(",");
   const selectedRegionsCSV = regionsForMode(region).slice().sort().join(",");
   const regionDirty = persistedRegionsCSV !== selectedRegionsCSV;
 
+  const persistedSeedsCSV = (project.custom_seed_keywords ?? []).slice().sort().join("|");
+  const currentSeedsCSV = (seg.seed_keywords ?? []).slice().sort().join("|");
+  const seedsDirty = persistedSeedsCSV !== currentSeedsCSV;
+
   const dirty =
     clientUrl !== project.client_url ||
     brand !== project.brand_name ||
+    seg.l1 !== (project.segment_l1 ?? null) ||
+    seg.l2 !== (project.segment_l2 ?? null) ||
+    seg.l3 !== (project.segment_l3 ?? null) ||
+    (seg.primary_product ?? null) !== (project.primary_product ?? null) ||
+    seedsDirty ||
     regionDirty;
 
   async function save() {
@@ -64,6 +85,12 @@ export default function ProjectHeader({
         body: JSON.stringify({
           client_url: clientUrl,
           brand_name: brand,
+          segment_l1: seg.l1,
+          segment_l2: seg.l2,
+          segment_l3: seg.l3,
+          primary_product: seg.primary_product ?? null,
+          custom_seed_keywords: seg.seed_keywords ?? [],
+          detection_confidence: seg.confidence ?? null,
           regions: regionsForMode(region),
         }),
       });
@@ -106,14 +133,49 @@ export default function ProjectHeader({
         </div>
       </div>
 
-      {/* v1.1.55: only the Save changes CTA lives here now. */}
+      <div className="mt-5" style={{ paddingTop: 16, borderTop: "1px solid rgba(255,255,255,0.06)" }}>
+        <SmartSegmentDetector
+          clientUrl={clientUrl}
+          value={seg}
+          onChange={setSeg}
+          onRegionHint={(r) => onRegionChange(r)}
+          onCompetitorsSuggested={onCompetitorsSuggested}
+          onSeedKeywordsApplied={onSeedKeywordsApplied}
+          // v1.1.13: persist detection result immediately so the segment shows
+          // up on the next page load instead of disappearing back into
+          // "Not detected yet." The detector calls this with the just-applied
+          // segment fields; we PATCH the project record directly without
+          // waiting for the user to click "Save changes."
+          onAutoSave={async (nextSeg) => {
+            try {
+              await fetch(`/api/projects/${project.id}`, {
+                method: "PATCH",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  segment_l1: nextSeg.l1,
+                  segment_l2: nextSeg.l2,
+                  segment_l3: nextSeg.l3,
+                  primary_product: nextSeg.primary_product ?? null,
+                  custom_seed_keywords: nextSeg.seed_keywords ?? [],
+                  detection_confidence: nextSeg.confidence ?? null,
+                }),
+              });
+              onSaved();
+            } catch { /* non-fatal — local state still has the segment */ }
+          }}
+        />
+      </div>
+
+      {/* v1.1.55: only the Save changes CTA lives here now — Copy PPT Prompt,
+          Export Full Report, and Run refresh moved to the global header so
+          users can fire them without scrolling back to the top of the page. */}
       {dirty && (
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>
           <button
             style={accentBtnStyle(saving)}
             disabled={saving}
             onClick={save}
-            title="Persist your edits to client URL, brand, or region without firing a SerpAPI run"
+            title="Persist your edits to client URL, brand, segment, or region without firing a SerpAPI run"
           >
             {saving ? "Saving…" : "Save changes"}
           </button>

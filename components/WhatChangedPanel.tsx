@@ -36,13 +36,9 @@ interface ChangesPayload {
 export default function WhatChangedPanel({
   projectId,
   region,
-  refreshNonce,
 }: {
   projectId: string;
   region: RegionMode;
-  /** v1.1.63: bumped by Dashboard after every refresh so the panel re-fetches
-   *  and shows the diff against the new snapshot rather than stale history. */
-  refreshNonce?: number;
 }) {
   const [data, setData] = useState<ChangesPayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,7 +55,7 @@ export default function WhatChangedPanel({
     const j = await res.json();
     setData(j);
     setLoading(false);
-  }, [projectId, region, refreshNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, region]);
 
   useEffect(() => { load(); }, [load]);
 

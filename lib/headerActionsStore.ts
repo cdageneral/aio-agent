@@ -21,11 +21,10 @@
 import { useSyncExternalStore } from "react";
 
 export interface HeaderActionsState {
-  /** Optional human-readable project label rendered next to the buttons.
-   *  Lets the header read "Acme Corp · Run refresh" instead of just buttons.
-   *  Hidden visually for now but kept on the type so future header tweaks
-   *  (breadcrumb-style "All Projects › Acme") don't need a store reshape. */
+  /** Optional human-readable project label rendered next to the buttons. */
   projectLabel?: string;
+  /** Project UUID — used by HeaderActions to build the /projects/[id]/edit URL. */
+  projectId?: string;
   /** True while the dashboard's refresh request is in flight. Drives the
    *  disabled state + label swap on the Run refresh button. */
   refreshing: boolean;
@@ -56,6 +55,7 @@ export function setHeaderActions(next: HeaderActionsState) {
   if (
     state &&
     state.projectLabel === next.projectLabel &&
+    state.projectId === next.projectId &&
     state.refreshing === next.refreshing &&
     state.hasMetrics === next.hasMetrics &&
     state.onRunRefresh === next.onRunRefresh &&

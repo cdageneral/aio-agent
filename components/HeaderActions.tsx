@@ -6,12 +6,14 @@
  * registered handlers via `setHeaderActions`; on the Projects index (or any
  * other route) this collapses to nothing.
  *
- * Buttons keep the same look and disabled-state logic they had inside
- * ProjectHeader so users see a 1:1 relocation, not a redesign.
+ * v1.1.63: Added "Edit Project" link that appears between "All Projects" and
+ * the action buttons whenever a project is active. Links to /projects/[id]/edit
+ * using the projectId registered in the store by Dashboard.
  */
 import { useHeaderActions } from "@/lib/headerActionsStore";
 import { ghostBtnStyle, primaryBtnStyle } from "./uiStyles";
 import { useState } from "react";
+import Link from "next/link";
 
 export default function HeaderActions() {
   const actions = useHeaderActions();
@@ -25,15 +27,27 @@ export default function HeaderActions() {
   const refreshDisabled = actions.refreshing;
 
   return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 8,
-        // Slightly smaller buttons than the original to fit the header row
-        // without bloating the nav height.
-      }}
-    >
+    <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+      {/* Edit Project — only shown when a projectId is registered */}
+      {actions.projectId && (
+        <Link
+          href={`/projects/${actions.projectId}/edit`}
+          style={{
+            ...ghostBtnStyle(false),
+            padding: "7px 12px",
+            fontSize: 13,
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            textDecoration: "none",
+          }}
+          title="Edit project settings, competitors, and keywords"
+        >
+          <i className="ti ti-edit" style={{ fontSize: 14 }} aria-hidden="true"></i>
+          Edit Project
+        </Link>
+      )}
+
       <button
         style={{ ...ghostBtnStyle(copyDisabled), padding: "7px 12px", fontSize: 13 }}
         disabled={copyDisabled}
