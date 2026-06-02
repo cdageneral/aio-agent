@@ -345,6 +345,13 @@ export async function createSnapshot(project_id: string, keywords_count: number)
   return rows[0];
 }
 
+/** v1.1.63: fetch a single snapshot by ID — used by chunked refresh to reuse
+ *  an in-progress snapshot across multiple API calls. */
+export async function getSnapshot(id: string): Promise<Snapshot | null> {
+  const { rows } = await sql<Snapshot>`SELECT * FROM snapshots WHERE id = ${id};`;
+  return rows[0] ?? null;
+}
+
 export async function finalizeSnapshot(id: string, aios_triggered: number, status: "complete" | "failed", error?: string) {
   await sql`UPDATE snapshots SET aios_triggered = ${aios_triggered}, status = ${status}, error = ${error ?? null} WHERE id = ${id};`;
 }

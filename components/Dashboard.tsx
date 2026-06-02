@@ -212,26 +212,55 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           console.warn("[onRefresh] failed to persist region change:", j);
         }
       }
-      const res = await fetch(`/api/projects/${projectId}/refresh`, { method: "POST" });
-      // v1.1.48: parse the response defensively. A common server-side failure
-      // mode (function crash, Vercel timeout returning HTML, missing API key
-      // returning a 500 page, etc.) is for the response to NOT be valid JSON.
-      // Without this guard, `await res.json()` would throw a "Unexpected
-      // token < in JSON" error that gets swallowed into a useless "Refresh
-      // failed" string instead of surfacing the actual HTTP failure.
-      let j: any = null;
-      try {
-        j = await res.json();
-      } catch {
-        const body = await res.text().catch(() => "");
-        throw new Error(
-          res.ok
-            ? "Refresh returned unparseable response"
-            : `Server returned ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 200)}` : ""}`,
-        );
+      // v1.1.63: chunked refresh. Split the keyword universe into batches of
+      // CHUNK_SIZE so each HTTP call completes in ~15–20 s (well inside any
+      // proxy or Vercel timeout), then stitch them all into a single snapshot.
+      // Falls back gracefully to a single call when keywords_count is unknown.
+      const CHUNK_SIZE = 50;
+      const kwCount = data?.keywords_count ?? 0;
+      const totalChunks = kwCount > 0 ? Math.ceil(kwCount / CHUNK_SIZE) : 1;
+
+      let snapshotId: string | undefined;
+      let totalAios = 0;
+      let totalFailed = 0;
+
+      for (let chunk = 0; chunk < totalChunks; chunk++) {
+        const kwOffset = chunk * CHUNK_SIZE;
+        const chunkBody: Record<string, unknown> = { kwOffset, kwLimit: CHUNK_SIZE };
+        if (snapshotId) chunkBody.snapshotId = snapshotId;
+
+        const res = await fetch(`/api/projects/${projectId}/refresh`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(chunkBody),
+        });
+        // v1.1.48: parse the response defensively. A common server-side failure
+        // mode (function crash, Vercel timeout returning HTML, missing API key
+        // returning a 500 page, etc.) is for the response to NOT be valid JSON.
+        // Without this guard, `await res.json()` would throw a "Unexpected
+        // token < in JSON" error that gets swallowed into a useless "Refresh
+        // failed" string instead of surfacing the actual HTTP failure.
+        let j: any = null;
+        try {
+          j = await res.json();
+        } catch {
+          const text = await res.text().catch(() => "");
+          throw new Error(
+            res.ok
+              ? "Refresh returned unparseable response"
+              : `Server returned ${res.status} ${res.statusText}${text ? ` — ${text.slice(0, 200)}` : ""}`,
+          );
+        }
+        if (!res.ok) throw new Error(j?.error ?? `Refresh failed (${res.status})`);
+
+        snapshotId = j.snapshot_id;
+        totalAios = j.total_aios ?? j.aios_triggered ?? 0;
+        totalFailed += j.failed ?? 0;
+
+        if (j.is_last_chunk) break;
       }
-      if (!res.ok) throw new Error(j?.error ?? `Refresh failed (${res.status})`);
-      setRefreshMsg(`Snapshot saved — ${j.aios_triggered} AIO(s) detected${j.failed ? `, ${j.failed} errored` : ""}.`);
+
+      setRefreshMsg(`Snapshot saved — ${totalAios} AIO(s) detected${totalFailed ? `, ${totalFailed} errored` : ""}.`);
       await load();
       // v1.1.15: nudge child panels (Quick Wins, Drilldown) so they refetch
       // their own data with the new snapshot rather than show stale state.
@@ -382,14 +411,10 @@ export default function Dashboard({ projectId }: { projectId: string }) {
     const proj = data?.project;
     const regionLbl = region === "us" ? "United States" : region === "ca" ? "Canada" : "United States + Canada";
     try {
-      // v1.1.62: `latest` is now forwarded so the printable cover page can
-      // render a small visual executive summary (KPI tiles drawn natively
-      // via jsPDF, not html2canvas) on top of the white cover sheet.
       await exportFullReportToPdf(root, {
         brand_name: proj?.brand_name ?? "—",
         client_url: proj?.client_url ?? "—",
         region_label: regionLbl,
-        latest: data?.latest ?? null,
       });
     } catch (e) {
       console.error("Full report export failed", e);
@@ -634,23 +659,14 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         onRefresh={onRefresh}
       />
 
-      {/* v1.1.62: data-export-section attributes drive the printable Full
-          Report PDF export. The exporter (lib/export.ts) walks these in a
-          fixed user-requested order — story → brands → what-changed →
-          position-chart → clusters → prioritization → drilldown — and
-          captures each panel onto its own white page. The attributes are
-          inert in the live UI; they exist only to give the exporter stable
-          selectors that survive future class renames. */}
-      <div data-export-section="story" data-export-title="Executive summary">
-        <StoryPanel
-          project={project}
-          latest={latest}
-          growth={growth}
-          region={region}
-          kindFilter={kindFilter}
-          onKindFilterChange={setKindFilter}
-        />
-      </div>
+      <StoryPanel
+        project={project}
+        latest={latest}
+        growth={growth}
+        region={region}
+        kindFilter={kindFilter}
+        onKindFilterChange={setKindFilter}
+      />
 
       {/* v1.1.60: Citation landscape — merges the former "Brand comparison"
           (CompetitorTable) and the bottom-of-page "Other domains in AIOs"
@@ -662,7 +678,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
           place the user already expects to find the competitive context. The
           standalone "Other domains in AIOs" section at the bottom of the page
           was removed at the same time to avoid duplication. */}
-      <section className="surface p-5" id="section-citation-landscape" data-export-section="brands" data-export-title="Tracked brand comparison">
+      <section className="surface p-5" id="section-citation-landscape">
         <div className="flex items-baseline justify-between mb-1 flex-wrap gap-2">
           <h2 className="h2">Citation landscape</h2>
           <span className="text-xs muted">Tracked brands · other domains · everything together</span>
@@ -671,7 +687,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         <CitationLandscape latest={latest} />
       </section>
 
-      <section className="surface p-5" data-export-section="what-changed" data-export-title="What changed — client and competitors">
+      <section className="surface p-5">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="h2">What changed</h2>
           <span className="text-xs muted">Snapshot diff · digest-ready summary you can ship to Slack.</span>
@@ -712,7 +728,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
             <p className="text-xs muted mb-2">How often Google is surfacing an AIO across tracked queries — market volume, not brand-specific.</p>
             <GrowthChart series={series} range={range} />
           </div>
-          <div className="surface-2 p-4" data-export-section="position-chart" data-export-title="Your position over time">
+          <div className="surface-2 p-4">
             {/* v1.1.42: renamed from "Acquisition rate" — the prior name was
                 vague and didn't make clear this is the time-series view of
                 the same "Your position" number in the executive summary.
@@ -727,7 +743,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         </div>
       </section>
 
-      <section className="surface p-5" data-export-section="clusters" data-export-title="Topic clusters">
+      <section className="surface p-5">
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
           <div>
             <h2 className="h2">Topic clusters</h2>
@@ -778,7 +794,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         </div>
       )}
 
-      <section className="surface p-5" id="section-quick-wins" data-export-section="prioritization" data-export-title="Cluster prioritization — AIO opportunities">
+      <section className="surface p-5" id="section-quick-wins">
         <div className="flex items-baseline justify-between mb-3 flex-wrap gap-2">
           <div>
             <h2 className="h2" style={{ display: "inline-flex", alignItems: "center" }}>
@@ -821,7 +837,7 @@ export default function Dashboard({ projectId }: { projectId: string }) {
         />
       </section>
 
-      <section className="surface p-5" data-export-section="drilldown" data-export-title="Keyword drilldown">
+      <section className="surface p-5">
         <div className="flex items-baseline justify-between mb-3">
           <h2 className="h2">Keyword drilldown</h2>
           <span className="text-xs muted">Click any row to expand the AIO answer, citation list, and brand-hit breakdown.</span>

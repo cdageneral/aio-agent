@@ -36,6 +36,14 @@ export interface SerpFetchOptions {
   location?: string;
   /** Skip the async page_token follow-up. Useful for cheap presence-only checks. */
   shallow?: boolean;
+  /**
+   * v1.1.62: hard wall-clock limit for the entire fetchAio call (including any
+   * async page_token follow-up).  When exceeded the keyword is treated as a
+   * failed fetch — the caller's catch block records an error-stub row so the
+   * keyword doesn't silently disappear from the snapshot.  Defaults to no
+   * limit (undefined = rely on the serverless function's overall maxDuration).
+   */
+  timeoutMs?: number;
 }
 
 function apiKey(): string {
@@ -52,8 +60,8 @@ function defaults(): Required<Pick<SerpFetchOptions, "gl" | "hl" | "device">> {
   };
 }
 
-async function getJson(url: string): Promise<any> {
-  const res = await fetch(url, { cache: "no-store" });
+async function getJson(url: string, signal?: AbortSignal): Promise<any> {
+  const res = await fetch(url, { cache: "no-store", signal });
   if (!res.ok) {
     throw new Error(`SerpAPI ${res.status}: ${await res.text().catch(() => res.statusText)}`);
   }
@@ -64,7 +72,7 @@ async function getJson(url: string): Promise<any> {
  * Build the AI Overview block from a SERP payload, following the page_token
  * async pattern if needed.
  */
-async function resolveAio(serp: any, shallow: boolean): Promise<ParsedAio | null> {
+async function resolveAio(serp: any, shallow: boolean, signal?: AbortSignal): Promise<ParsedAio | null> {
   const ai = serp?.ai_overview;
   if (!ai) return null;
 
@@ -77,7 +85,7 @@ async function resolveAio(serp: any, shallow: boolean): Promise<ParsedAio | null
     const follow = `${SERPAPI_BASE}?engine=google_ai_overview&page_token=${encodeURIComponent(
       ai.page_token,
     )}&api_key=${encodeURIComponent(apiKey())}`;
-    const data = await getJson(follow);
+    const data = await getJson(follow, signal);
     return parseAioBlock(data?.ai_overview);
   }
 
@@ -132,8 +140,14 @@ export async function fetchAio(keyword: string, opts: SerpFetchOptions = {}): Pr
   });
   if (opts.location) params.set("location", opts.location);
 
-  const serp = await getJson(`${SERPAPI_BASE}?${params.toString()}`);
-  return resolveAio(serp, opts.shallow ?? false);
+  // v1.1.62: wrap the entire fetch (initial SERP + optional async follow-up)
+  // in an AbortSignal when the caller supplies a timeoutMs.  This prevents a
+  // single slow/hung SerpAPI call from occupying a pool slot for the remainder
+  // of the function's lifetime.
+  const signal = opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined;
+
+  const serp = await getJson(`${SERPAPI_BASE}?${params.toString()}`, signal);
+  return resolveAio(serp, opts.shallow ?? false, signal);
 }
 
 /**

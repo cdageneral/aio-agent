@@ -173,27 +173,16 @@ export async function exportDrilldownToPdf(rows: DrilldownExportRow[], ctx: Expo
 
 // ── Full-report PDF (dashboard capture) ───────────────────────────────────
 //
-// v1.1.62 rewrite: printable white-paper layout.
-//   • Cover sheet — white background with client name, scope metadata, and a
-//     small visual executive summary (4 KPI tiles drawn natively via jsPDF
-//     primitives so the cover renders crisply even though the dashboard
-//     proper is captured as bitmaps).
-//   • Section order is fixed and user-prescribed (executive summary cards →
-//     tracked-brand comparison → what changed → position-over-time chart →
-//     topic clusters → cluster prioritization → keyword drilldown). The
-//     exporter looks up each section by its `data-export-section` attribute
-//     instead of walking direct children, which was order-coupled to the JSX.
-//   • Print mode — the report root gets `data-aio-export-print="true"`
-//     stamped on it while the capture pass runs. CSS rules in globals.css
-//     repaint surfaces white and bump muted text to print-readable grey
-//     during that window. The attribute is removed in a finally block so a
-//     failed capture can't leave the live dashboard repainted.
-//   • CitationLandscape only shows one tab at a time; the user asked for the
-//     "Tracked brands" table specifically. We dispatch the panel's own
-//     SHOW_TAB_EVENT to flip it to that tab before capturing the section.
+// v1.1.32: Renders the entire dashboard to a multi-page PDF by snapshotting
+// each top-level <section> (and the header) individually with html2canvas,
+// then laying the resulting bitmaps onto Letter-sized PDF pages. Capturing
+// per-section (instead of one giant capture) keeps each panel intact across
+// page breaks — no charts get sliced in half — and keeps memory bounded on
+// long dashboards.
 //
 // All libs are dynamic-imported so they only ship to the browser when the
-// user actually clicks Export.
+// user actually clicks Export. The function expects a DOM element that wraps
+// the dashboard panels (Dashboard.tsx attaches a ref via `data-aio-report-root`).
 
 export interface FullReportContext {
   brand_name: string;
@@ -201,318 +190,26 @@ export interface FullReportContext {
   region_label: string;
   /** ISO timestamp string. Defaults to now if omitted. */
   generated_at?: string;
-  /** v1.1.62: latest snapshot payload — used to render the cover-page
-   *  executive summary tiles via jsPDF primitives. May be null when no
-   *  snapshot exists yet; the cover then renders without the tiles. */
-  latest?: any | null;
 }
 
-/** The user-prescribed section order for the printable export. Each entry
- *  pairs the `data-export-section` value with a display title shown on the
- *  section's title banner. If the matching node isn't on the page (e.g.
- *  no snapshot yet so a panel is hidden), it's silently skipped. */
-const PRINT_SECTION_ORDER: { key: string; title: string }[] = [
-  { key: "story",          title: "Executive summary" },
-  { key: "brands",         title: "Tracked brand comparison" },
-  { key: "what-changed",   title: "What changed — client and competitors" },
-  { key: "position-chart", title: "Your position over time" },
-  { key: "clusters",       title: "Topic clusters" },
-  { key: "prioritization", title: "Cluster prioritization — AIO opportunities" },
-  { key: "drilldown",      title: "Keyword drilldown" },
-];
-
-/** Resolve the desired sections in print order. Skips any that aren't
- *  currently in the DOM (no warning — the panel is simply absent in the
- *  PDF if the user hasn't run a refresh yet). */
-function collectPrintSections(root: HTMLElement): { el: HTMLElement; title: string }[] {
-  const out: { el: HTMLElement; title: string }[] = [];
-  for (const { key, title } of PRINT_SECTION_ORDER) {
-    const el = root.querySelector<HTMLElement>(`[data-export-section="${key}"]`);
-    if (!el) continue;
+/**
+ * Capture every direct child of `root` that should appear in the report.
+ * We grab the immediate children rather than calling html2canvas on the whole
+ * tree so a) charts don't get sliced across pages, and b) the .next/Image
+ * proxy and sticky overlays inside child panels don't confuse the renderer.
+ */
+function collectReportSections(root: HTMLElement): HTMLElement[] {
+  // Direct children of the Dashboard wrapper are <ProjectHeader>, the inline
+  // "Updating…" pill, refresh-message text, and the result <section>s. We
+  // filter to anything that's a real renderable block with non-zero size.
+  const kids = Array.from(root.children) as HTMLElement[];
+  return kids.filter((el) => {
+    if (!(el instanceof HTMLElement)) return false;
+    // Skip the transient "Updating…" pill and empty text wrappers — they're
+    // noise in a report.
+    if (el.getAttribute("aria-live") === "polite") return false;
     const rect = el.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) continue;
-    out.push({ el, title });
-  }
-  return out;
-}
-
-/** Pull cover-sheet metrics off the `latest` payload. Returns null when the
- *  snapshot is missing or empty so the cover knows to skip the KPI strip. */
-interface CoverKpi { label: string; value: string; sub: string; accent: [number, number, number]; }
-function deriveCoverKpis(latest: any | null, brandName: string): CoverKpi[] | null {
-  if (!latest || !latest.total_keywords) return null;
-  const totalKw = latest.total_keywords ?? 0;
-  const totalAios = latest.total_aios_triggered ?? 0;
-  const totalSlots = latest.total_citation_slots ?? 0;
-  const triggerPct = totalKw > 0 ? totalAios / totalKw : 0;
-  const client = (latest.brands ?? []).find((b: any) => b.kind === "client");
-  const ranked = [...(latest.brands ?? [])].sort(
-    (a: any, b: any) => (b.citation_rate ?? 0) - (a.citation_rate ?? 0),
-  );
-  const topBrand = ranked[0];
-  const clientCitationRate = client?.citation_rate ?? 0;
-  const clientShare = totalKw ? (client?.aios_acquired ?? 0) / totalKw : 0;
-
-  // RGB tuples for the accent stripes — same semantic mapping the live
-  // dashboard uses (cyan = market, blue = client, lime = positive growth,
-  // pink = competition).
-  const KPI_CYAN: [number, number, number] = [37, 178, 165];
-  const KPI_BLUE: [number, number, number] = [31, 79, 196];
-  const KPI_LIME: [number, number, number] = [61, 122, 20];
-  const KPI_PINK: [number, number, number] = [196, 47, 116];
-
-  return [
-    {
-      label: "AIO PENETRATION",
-      value: `${(triggerPct * 100).toFixed(1)}%`,
-      sub: `${totalAios.toLocaleString()} of ${totalKw.toLocaleString()} queries`,
-      accent: KPI_CYAN,
-    },
-    {
-      label: "YOUR POSITION",
-      value: `${(clientCitationRate * 100).toFixed(1)}%`,
-      sub: `${brandName} citation rate`,
-      accent: KPI_BLUE,
-    },
-    {
-      label: "CITATION SHARE",
-      value: `${(clientShare * 100).toFixed(1)}%`,
-      sub: `${(client?.aios_acquired ?? 0).toLocaleString()} of ${totalKw.toLocaleString()} citations`,
-      accent: KPI_LIME,
-    },
-    {
-      label: "TOP BRAND",
-      value: topBrand ? `${((topBrand.citation_rate ?? 0) * 100).toFixed(1)}%` : "—",
-      sub: topBrand ? `${topBrand.brand_name}${topBrand.kind === "client" ? " · you lead" : ""}` : "—",
-      accent: KPI_PINK,
-    },
-  ];
-}
-
-/** Draw a small KPI tile on the cover page. Pure jsPDF primitives — no
- *  bitmap, so the cover scales crisply on print. Tile is `width` pt wide,
- *  ~88 pt tall, with a 3 pt accent stripe down the left edge. */
-function drawCoverKpi(
-  doc: any,
-  kpi: CoverKpi,
-  x: number,
-  y: number,
-  width: number,
-): void {
-  const height = 86;
-  // Tile background — very light grey fill, hairline border.
-  doc.setFillColor(248, 250, 252);
-  doc.setDrawColor(216, 221, 230);
-  doc.setLineWidth(0.6);
-  doc.roundedRect(x, y, width, height, 6, 6, "FD");
-
-  // Accent stripe on the left edge.
-  doc.setFillColor(kpi.accent[0], kpi.accent[1], kpi.accent[2]);
-  doc.rect(x, y, 3, height, "F");
-
-  // Uppercase label.
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(kpi.accent[0], kpi.accent[1], kpi.accent[2]);
-  doc.text(kpi.label, x + 12, y + 18);
-
-  // Big value — the headline number/percentage.
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(22);
-  doc.setTextColor(26, 29, 36);
-  doc.text(kpi.value, x + 12, y + 48);
-
-  // Sub-caption — context line under the value. Wrap if needed.
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.setTextColor(112, 122, 140);
-  const wrapped = doc.splitTextToSize(kpi.sub, width - 18) as string[];
-  doc.text(wrapped.slice(0, 2), x + 12, y + 64);
-}
-
-/** Draw the printable cover sheet. White background, client name in large
- *  type, then a small visual executive summary at the bottom. */
-function drawPrintCover(doc: any, ctx: FullReportContext, sectionsCount: number): void {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 48;
-
-  // White paper canvas.
-  doc.setFillColor(255, 255, 255);
-  doc.rect(0, 0, pageWidth, pageHeight, "F");
-
-  // Header eyebrow — small report-type label, sits above the title.
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(9);
-  doc.setTextColor(31, 79, 196);
-  doc.text("AIO COVERAGE REPORT", margin, 96, { charSpace: 1.5 });
-
-  // Hairline accent under the eyebrow.
-  doc.setDrawColor(31, 79, 196);
-  doc.setLineWidth(2);
-  doc.line(margin, 104, margin + 36, 104);
-
-  // Client name — the dominant element on the cover.
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(36);
-  doc.setTextColor(20, 22, 28);
-  doc.text(ctx.brand_name, margin, 154);
-
-  // Client URL — secondary, dim grey.
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(13);
-  doc.setTextColor(90, 100, 120);
-  doc.text(ctx.client_url, margin, 178);
-
-  // Scope metadata block.
-  const generated = ctx.generated_at ?? new Date().toISOString();
-  const stamp = new Date(generated).toLocaleString();
-  doc.setFontSize(10.5);
-  doc.setTextColor(74, 84, 102);
-  doc.text(`Region:  ${ctx.region_label}`, margin, 218);
-  doc.text(`Generated:  ${stamp}`, margin, 236);
-  doc.text(`Sections:  ${sectionsCount}`, margin, 254);
-
-  // ── Small visual executive summary ─────────────────────────────────────
-  const kpis = deriveCoverKpis(ctx.latest ?? null, ctx.brand_name);
-  if (kpis) {
-    // Section divider above the KPI strip — visual break between the
-    // identity block and the data block.
-    doc.setDrawColor(216, 221, 230);
-    doc.setLineWidth(0.5);
-    doc.line(margin, 308, pageWidth - margin, 308);
-
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(10);
-    doc.setTextColor(74, 84, 102);
-    doc.text("EXECUTIVE SUMMARY", margin, 332, { charSpace: 1.2 });
-
-    // 2 × 2 grid of KPI tiles. 2-up keeps each tile readable on Letter
-    // portrait — a 4-up strip would crush the value font.
-    const gridGap = 12;
-    const contentWidth = pageWidth - margin * 2;
-    const tileWidth = (contentWidth - gridGap) / 2;
-    const tileTop = 350;
-    const rowHeight = 86 + gridGap;
-    kpis.forEach((kpi, i) => {
-      const col = i % 2;
-      const row = Math.floor(i / 2);
-      const x = margin + col * (tileWidth + gridGap);
-      const y = tileTop + row * rowHeight;
-      drawCoverKpi(doc, kpi, x, y, tileWidth);
-    });
-  } else {
-    // No snapshot yet — note the absence so the cover doesn't look broken.
-    doc.setFont("helvetica", "italic");
-    doc.setFontSize(11);
-    doc.setTextColor(140, 148, 165);
-    doc.text(
-      "No snapshot data available yet — run a refresh to populate the executive summary.",
-      margin, 332,
-    );
-  }
-
-  // Footer signature on the cover.
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.setTextColor(140, 148, 165);
-  doc.text("AIO Coverage Tracker · Printable report", margin, pageHeight - 36);
-}
-
-/** Footer drawn on every section page. Dark text on white for print. */
-function drawPrintFooter(doc: any, ctx: FullReportContext): void {
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const pageNum = doc.internal.getNumberOfPages?.() ?? 1;
-  doc.setDrawColor(216, 221, 230);
-  doc.setLineWidth(0.5);
-  doc.line(36, pageHeight - 30, pageWidth - 36, pageHeight - 30);
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.setTextColor(112, 122, 140);
-  doc.text(`AIO Coverage Tracker · ${ctx.brand_name}`, 36, pageHeight - 16);
-  doc.text(`Page ${pageNum}`, pageWidth - 36, pageHeight - 16, { align: "right" });
-}
-
-/** Draw a section title banner at a given y in points. Returns the y where
- *  the banner ends so the caller knows where to start the bitmap. */
-function drawSectionBanner(doc: any, title: string, x: number, y: number, width: number): number {
-  const height = 28;
-  // Banner background — light blue tint.
-  doc.setFillColor(241, 244, 251);
-  doc.roundedRect(x, y, width, height, 4, 4, "F");
-  // Left accent bar.
-  doc.setFillColor(31, 79, 196);
-  doc.rect(x, y, 4, height, "F");
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(12.5);
-  doc.setTextColor(26, 29, 36);
-  doc.text(title, x + 14, y + 18);
-  return y + height + 10;
-}
-
-/** html2canvas onclone hook — runs inside the cloned DOM right before
- *  bitmap rasterization. Belt-and-suspenders to the print-mode CSS in
- *  globals.css: rewrites hardcoded dark inline `background-color` and
- *  `color` values that the StoryPanel and CitationLandscape components
- *  set via inline style. CSS variable overrides handle the rest. */
-function recolorClonedTreeForPrint(_doc: Document, root: HTMLElement): void {
-  // Make sure the clone is print-flagged even if the source page hadn't
-  // propagated the attribute by the time html2canvas snapshotted it.
-  const reportRoot = root.closest<HTMLElement>('[data-aio-report-root="true"]') ?? root;
-  reportRoot.setAttribute("data-aio-export-print", "true");
-
-  // Source-of-truth maps: known dark colors → print-friendly replacements.
-  // Browsers normalize inline `style.backgroundColor` to "rgb(...)" form,
-  // so we match against the rgb spelling rather than the hex.
-  const DARK_BG_TO_LIGHT: Record<string, string> = {
-    "rgb(12, 15, 21)":  "#ffffff", // surface --   #0c0f15
-    "rgb(17, 21, 29)":  "#f7f8fa", // surface-2 -- #11151d
-    "rgb(6, 7, 11)":    "#ffffff", // bg --        #06070b
-    "rgb(11, 13, 18)":  "#ffffff", // legacy cover bg
-    "rgb(20, 24, 32)":  "#f7f8fa", // scope toggle tile bg
-  };
-  const NEAR_WHITE_TO_INK: Record<string, string> = {
-    "rgb(244, 246, 251)": "#1a1d24", // --text
-    "rgb(214, 219, 230)": "#1a1d24", // segmented control inactive text
-  };
-  const MUTED_GREY_TO_PRINT: Record<string, string> = {
-    "rgb(138, 147, 166)": "#4a5466", // --muted
-    "rgb(90, 100, 120)":  "#707a8c", // --dim
-  };
-
-  const all = root.querySelectorAll<HTMLElement>("*");
-  all.forEach((n) => {
-    if (!(n instanceof HTMLElement)) return;
-
-    const bg = n.style.backgroundColor;
-    if (bg && DARK_BG_TO_LIGHT[bg]) {
-      n.style.backgroundColor = DARK_BG_TO_LIGHT[bg];
-      // The borders set alongside these dark backgrounds use translucent
-      // white that disappears on white paper — bump them to a hairline
-      // print grey so panels still have visible edges.
-      if (n.style.borderColor && n.style.borderColor.includes("255")) {
-        n.style.borderColor = "rgba(0,0,0,0.10)";
-      }
-    }
-    // Translucent white-on-dark overlays (rgba(255,255,255,0.0x)) vanish on
-    // a white page. Repaint to a faint cool grey so the layout still reads.
-    if (bg && bg.startsWith("rgba(255, 255, 255")) {
-      n.style.backgroundColor = "#f7f8fa";
-    }
-
-    const fg = n.style.color;
-    if (fg && NEAR_WHITE_TO_INK[fg]) {
-      n.style.color = NEAR_WHITE_TO_INK[fg];
-    } else if (fg && MUTED_GREY_TO_PRINT[fg]) {
-      n.style.color = MUTED_GREY_TO_PRINT[fg];
-    }
-
-    // Translucent dark borders (rgba(255,255,255,0.0x)) — same fix as bg.
-    const bc = n.style.borderColor;
-    if (bc && bc.startsWith("rgba(255, 255, 255")) {
-      n.style.borderColor = "rgba(0,0,0,0.10)";
-    }
+    return rect.width > 0 && rect.height > 0;
   });
 }
 
@@ -526,139 +223,134 @@ export async function exportFullReportToPdf(
   ]);
   const html2canvas = (html2canvasMod as any).default ?? html2canvasMod;
 
-  // ── Pre-capture setup ───────────────────────────────────────────────────
-  // 1. Flip the report root into print mode so the CSS overrides in
-  //    globals.css repaint surfaces white.
-  // 2. Force the Citation landscape panel to its "brands" tab — the user
-  //    asked for the tracked-brand comparison table specifically, and
-  //    CitationLandscape only renders one tab at a time. We dispatch the
-  //    panel's own SHOW_TAB_EVENT (defined in CitationLandscape.tsx).
-  // 3. Wait one paint frame so React has a chance to re-render before we
-  //    start snapshotting.
-  root.setAttribute("data-aio-export-print", "true");
-  if (typeof window !== "undefined") {
-    window.dispatchEvent(
-      new CustomEvent("aio:citation-landscape-show-tab", { detail: { tab: "brands" } }),
-    );
+  const sections = collectReportSections(root);
+  if (sections.length === 0) {
+    throw new Error("No dashboard sections found to export.");
   }
-  // Two animation frames + a microtask — empirically enough for Recharts
-  // to settle on the new CSS-var-driven text fills.
-  await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
 
-  try {
-    const sections = collectPrintSections(root);
-    if (sections.length === 0) {
-      throw new Error("No dashboard sections found to export.");
-    }
+  // Letter portrait, points. 612 x 792 with a 36pt margin all around.
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 36;
+  const contentWidth = pageWidth - margin * 2;
 
-    // Letter portrait, points. 612 x 792 with a 48 pt margin all around for
-    // the cover and a 36 pt margin for content pages (more breathable cover).
-    const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
-    const pageWidth = doc.internal.pageSize.getWidth();
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const contentMargin = 36;
-    const contentWidth = pageWidth - contentMargin * 2;
+  // ── Cover page ──────────────────────────────────────────────────────────
+  // Dark background to match the app's aesthetic. Drawn as a filled rect so
+  // it covers the whole first page edge-to-edge.
+  doc.setFillColor(11, 13, 18);
+  doc.rect(0, 0, pageWidth, pageHeight, "F");
 
-    // ── Cover page ────────────────────────────────────────────────────────
-    drawPrintCover(doc, ctx, sections.length);
+  doc.setTextColor(244, 246, 251);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(28);
+  doc.text("AIO Coverage Report", margin, 140);
 
-    // ── Section pages ─────────────────────────────────────────────────────
-    // For each section: snapshot to a white canvas, then lay it out on its
-    // own page (or slice across pages if it's taller than one page). Each
-    // section starts on a fresh page with a title banner above the bitmap.
-    for (let i = 0; i < sections.length; i++) {
-      const { el, title } = sections[i];
-      // eslint-disable-next-line no-await-in-loop
-      const canvas = await html2canvas(el, {
-        backgroundColor: "#ffffff",
-        scale: 2,
-        useCORS: true,
-        logging: false,
-        windowWidth: el.scrollWidth,
-        windowHeight: el.scrollHeight,
-        onclone: (clonedDoc: Document, clonedEl: HTMLElement) => {
-          recolorClonedTreeForPrint(clonedDoc, clonedEl);
-        },
-      });
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(14);
+  doc.setTextColor(182, 245, 59);
+  doc.text(ctx.brand_name, margin, 172);
 
-      const imgWidthPx = canvas.width;
-      const imgHeightPx = canvas.height;
-      const bannerHeight = 38; // banner + spacing under it
-      const usableHeight = pageHeight - contentMargin * 2 - 24; // reserve room for footer
-      const firstPageImgHeight = usableHeight - bannerHeight;
+  doc.setFontSize(11);
+  doc.setTextColor(190, 196, 210);
+  doc.text(ctx.client_url, margin, 192);
 
-      // Scale: fit canvas to contentWidth, see how tall the rendered image is.
-      const renderWidth = contentWidth;
-      const renderHeight = (imgHeightPx * contentWidth) / imgWidthPx;
+  const generated = ctx.generated_at ?? new Date().toISOString();
+  const stamp = new Date(generated).toLocaleString();
+  doc.setFontSize(10);
+  doc.setTextColor(140, 148, 165);
+  doc.text(`Region: ${ctx.region_label}`, margin, 230);
+  doc.text(`Generated: ${stamp}`, margin, 248);
+  doc.text(`Sections: ${sections.length}`, margin, 266);
 
-      if (renderHeight <= firstPageImgHeight) {
-        // Whole section fits on one page below the title banner.
-        doc.addPage();
-        doc.setFillColor(255, 255, 255);
-        doc.rect(0, 0, pageWidth, pageHeight, "F");
-        const imgY = drawSectionBanner(doc, title, contentMargin, contentMargin, contentWidth);
-        doc.addImage(
-          canvas.toDataURL("image/png"),
-          "PNG",
-          contentMargin, imgY,
-          renderWidth, renderHeight,
+  // Footer brand strip on the cover
+  doc.setDrawColor(37, 224, 206);
+  doc.setLineWidth(2);
+  doc.line(margin, 290, margin + 120, 290);
+
+  // ── Section pages ───────────────────────────────────────────────────────
+  // For each section: snapshot to canvas, then paginate the resulting image
+  // across as many PDF pages as it needs. Section background is forced to the
+  // app's dark surface color so the captured DOM has a consistent look even
+  // when individual panels rely on the body background bleeding through.
+  for (let i = 0; i < sections.length; i++) {
+    const el = sections[i];
+    // eslint-disable-next-line no-await-in-loop
+    const canvas = await html2canvas(el, {
+      backgroundColor: "#0b0d12",
+      scale: 2, // retina-ish — keeps charts readable in the PDF
+      useCORS: true,
+      logging: false,
+      // Capturing the natural rendered size avoids quirks where html2canvas
+      // measures the window viewport instead of the element.
+      windowWidth: el.scrollWidth,
+      windowHeight: el.scrollHeight,
+    });
+
+    // Convert pixel dims to PDF points, scaled to fit the content width.
+    const imgWidthPx = canvas.width;
+    const imgHeightPx = canvas.height;
+    const renderWidth = contentWidth;
+    const renderHeight = (imgHeightPx * contentWidth) / imgWidthPx;
+
+    // How much vertical space is available per page (in points).
+    const usableHeight = pageHeight - margin * 2;
+
+    if (renderHeight <= usableHeight) {
+      // Fits on one page — just drop it.
+      doc.addPage();
+      doc.setFillColor(11, 13, 18);
+      doc.rect(0, 0, pageWidth, pageHeight, "F");
+      const dataUrl = canvas.toDataURL("image/png");
+      doc.addImage(dataUrl, "PNG", margin, margin, renderWidth, renderHeight);
+      drawPageFooter(doc, ctx.brand_name);
+    } else {
+      // Section is taller than one page — slice the source canvas vertically
+      // and place each slice on its own page. The slice height in source
+      // pixels is whatever maps to one usable page in PDF points.
+      const sliceHeightPx = Math.floor((usableHeight * imgWidthPx) / contentWidth);
+      let yOffsetPx = 0;
+      while (yOffsetPx < imgHeightPx) {
+        const thisSlicePx = Math.min(sliceHeightPx, imgHeightPx - yOffsetPx);
+        // Draw the slice into an off-screen canvas of the slice's size.
+        const sliceCanvas = document.createElement("canvas");
+        sliceCanvas.width = imgWidthPx;
+        sliceCanvas.height = thisSlicePx;
+        const sctx = sliceCanvas.getContext("2d");
+        if (!sctx) break;
+        sctx.fillStyle = "#0b0d12";
+        sctx.fillRect(0, 0, imgWidthPx, thisSlicePx);
+        sctx.drawImage(
+          canvas,
+          0, yOffsetPx, imgWidthPx, thisSlicePx,
+          0, 0, imgWidthPx, thisSlicePx,
         );
-        drawPrintFooter(doc, ctx);
-      } else {
-        // Section is taller than one page — slice the source canvas vertically
-        // and place each slice on its own page. The first page carries the
-        // title banner; subsequent pages give the full usable height to the
-        // bitmap continuation (no repeated banner).
-        const firstSlicePx = Math.floor((firstPageImgHeight * imgWidthPx) / contentWidth);
-        const subsequentSlicePx = Math.floor((usableHeight * imgWidthPx) / contentWidth);
 
-        let yOffsetPx = 0;
-        let isFirst = true;
-        while (yOffsetPx < imgHeightPx) {
-          const slicePx = isFirst ? firstSlicePx : subsequentSlicePx;
-          const thisSlicePx = Math.min(slicePx, imgHeightPx - yOffsetPx);
-          const sliceCanvas = document.createElement("canvas");
-          sliceCanvas.width = imgWidthPx;
-          sliceCanvas.height = thisSlicePx;
-          const sctx = sliceCanvas.getContext("2d");
-          if (!sctx) break;
-          sctx.fillStyle = "#ffffff";
-          sctx.fillRect(0, 0, imgWidthPx, thisSlicePx);
-          sctx.drawImage(
-            canvas,
-            0, yOffsetPx, imgWidthPx, thisSlicePx,
-            0, 0, imgWidthPx, thisSlicePx,
-          );
+        const sliceRenderHeight = (thisSlicePx * contentWidth) / imgWidthPx;
+        doc.addPage();
+        doc.setFillColor(11, 13, 18);
+        doc.rect(0, 0, pageWidth, pageHeight, "F");
+        doc.addImage(sliceCanvas.toDataURL("image/png"), "PNG", margin, margin, renderWidth, sliceRenderHeight);
+        drawPageFooter(doc, ctx.brand_name);
 
-          const sliceRenderHeight = (thisSlicePx * contentWidth) / imgWidthPx;
-          doc.addPage();
-          doc.setFillColor(255, 255, 255);
-          doc.rect(0, 0, pageWidth, pageHeight, "F");
-          let imgY = contentMargin;
-          if (isFirst) {
-            imgY = drawSectionBanner(doc, title, contentMargin, contentMargin, contentWidth);
-          }
-          doc.addImage(
-            sliceCanvas.toDataURL("image/png"),
-            "PNG",
-            contentMargin, imgY,
-            renderWidth, sliceRenderHeight,
-          );
-          drawPrintFooter(doc, ctx);
-
-          yOffsetPx += thisSlicePx;
-          isFirst = false;
-        }
+        yOffsetPx += thisSlicePx;
       }
     }
-
-    const filename = `aio-full-report-${safeSlug(ctx.brand_name)}-${todayStamp()}.pdf`;
-    doc.save(filename);
-  } finally {
-    // Always clear print mode, even if capture threw — otherwise the live
-    // dashboard would stay repainted in light theme until next reload.
-    root.removeAttribute("data-aio-export-print");
   }
+
+  const filename = `aio-full-report-${safeSlug(ctx.brand_name)}-${todayStamp()}.pdf`;
+  doc.save(filename);
+}
+
+function drawPageFooter(doc: any, brand: string): void {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const pageNum = doc.internal.getNumberOfPages?.() ?? 1;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8);
+  doc.setTextColor(120, 128, 145);
+  doc.text(`AIO Coverage Tracker · ${brand}`, 36, pageHeight - 18);
+  doc.text(`Page ${pageNum}`, pageWidth - 36, pageHeight - 18, { align: "right" });
 }
 
 // ── PPT Prompt Builder ────────────────────────────────────────────────────

@@ -4,29 +4,40 @@ All notable changes to this project will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versioning follows [SemVer](https://semver.org/).
 
-## [1.1.62] — 2026-05-25
+## [1.1.63] — 2026-06-02
 
-Printable PDF export format. The Export Full Report flow has been rebuilt as a white-paper deliverable instead of a dark-canvas screenshot dump. The previous export bolted the live dashboard's dark-mode aesthetic onto the PDF — fine on a monitor, but unreadable on a printer and visually unbranded for sharing externally. Three structural changes ship together: a printable cover sheet, a fixed user-prescribed section order, and a print-mode CSS overlay that repaints the dashboard white for the duration of the capture pass.
+Chunked refresh — eliminates 504 Gateway Timeout errors for any universe size. Previously the POST /refresh handler processed all keywords in a single synchronous HTTP call. At 398 keywords × CONCURRENCY=8 the typical run time was ~150 s, but worst-case (slow SerpAPI responses, async page_token follow-ups) pushed past Vercel's 300 s Pro ceiling and/or Cloudflare's default 100 s proxy timeout, producing a 504 before the response arrived.
 
-### Added
-- **Cover sheet** — `lib/export.ts` `drawPrintCover()`. White background, eyebrow "AIO COVERAGE REPORT" in brand blue with a hairline accent rule under it, the client brand name at 36 pt as the dominant element, the client URL underneath in dim grey, then a scope metadata block (region, generated timestamp, section count). The cover is drawn with jsPDF primitives so it scales crisply on print and isn't subject to html2canvas's rasterization.
-- **Visual executive summary on the cover** — `drawCoverKpi()` lays out a 2×2 grid of KPI tiles below the metadata block, each with a 3 pt accent stripe down the left edge, an uppercase label, a 22 pt headline value, and a wrapped sub-caption. The four KPIs are: AIO Penetration (cyan), Your Position (blue), Citation Share (lime), and Top Brand (pink). Numbers derive from the same `latest` snapshot payload the dashboard cards use, so they match the live UI exactly — no recomputation, no rounding drift. When no snapshot exists yet the strip is replaced with an italic note so the cover doesn't look broken.
-- **Print-mode CSS overlay** — `app/globals.css`. New `[data-aio-export-print="true"]` selector block overrides the CSS custom properties (`--bg`, `--surface`, `--surface-2`, `--text`, `--muted`, `--dim`, `--line`) to a light palette. Because `.surface`, `.kpi`, `.muted`, `.h2`, and the CompetitorTable borders all read these variables, the entire surface area of the dashboard repaints automatically when the attribute is set. The block also adds targeted overrides for `.tag`/`.tag-accent`/`.tag-pos`/`.tag-neg` (so status pills stay readable on white) and Recharts grid/axis/legend selectors (so chart text doesn't render in the white-on-white dark theme).
-- **`data-export-section` attributes** on the Dashboard's section wrappers — `components/Dashboard.tsx`. Each panel that should appear in the printable PDF carries `data-export-section="<key>"` plus a `data-export-title` companion. Keys: `story`, `brands`, `what-changed`, `position-chart`, `clusters`, `prioritization`, `drilldown`. The exporter looks panels up by these attributes in fixed order rather than walking direct children, so future Dashboard JSX reorders don't change the report layout. The position-chart attribute lives on the `surface-2` div that wraps `<AcquisitionChart />` specifically (not the parent grid that also holds `<GrowthChart />`), so only the "Your position over time" chart appears in the PDF — the AIOs-triggered chart is intentionally excluded.
+The fix splits the keyword list into batches of 50 on the client. Each HTTP call processes ~50 keywords (≈ 15–20 s at CONCURRENCY=8), well inside every timeout layer. All chunks write into a single snapshot row — the first call creates it; subsequent calls pass back the `snapshotId` to reuse it. The progress bar continues to update in real time between chunks because /refresh/progress reads `serp_results` rows regardless of snapshot status.
 
 ### Changed
-- **`lib/export.ts` `exportFullReportToPdf` rewritten end-to-end.** Now produces a Letter-portrait PDF with a printable cover page (white background, brand-blue eyebrow + accent rule, client name + URL, scope metadata, 2×2 KPI strip) followed by one section per user-prescribed entry in `PRINT_SECTION_ORDER`. Each section page leads with a title banner — light blue tint, 4 pt left accent bar, 12.5 pt bold title — and then the bitmap of that section captured at scale 2 against a white background. Sections that overflow one page slice across additional pages and only the first page of a section carries the title banner. Every page gets a hairline divider above a "AIO Coverage Tracker · {brand}" + page number footer.
-- **`FullReportContext` interface gains a `latest` field** so the cover sheet can render KPI tiles without the exporter having to refetch metrics. `components/Dashboard.tsx` `exportReportHandler` now passes `data?.latest ?? null` through.
-- **CitationLandscape's "brands" tab is forced active during export.** The exporter dispatches the panel's own `aio:citation-landscape-show-tab` window event with `{ tab: "brands" }` before the capture pass starts, then waits two animation frames so React can re-render. Without this, a user who had the panel set to "Other domains" or "All" would get the wrong table in the PDF.
-
-### Implementation notes
-- **Defense in depth for hardcoded inline styles.** The print-mode CSS handles everything that reads CSS variables (most of the app). For the handful of inline-styled hex colors in `StoryPanel` (`#0c0f15`, `#11151d`, `#f4f6fb`, `#d6dbe6`, `#8a93a6`, `#5a6478`) and the `CitationLandscape` tab strip (`#11151d`), the exporter passes an `onclone` callback to html2canvas that walks the cloned tree and rewrites those known dark inline values to their print equivalents. The live DOM is never modified — only the html2canvas clone. The two-pass approach (CSS variables + onclone rewrite) keeps `StoryPanel.tsx` and `CitationLandscape.tsx` untouched, which was the simplest path to a printable PDF that didn't require refactoring components that work fine in the live UI.
-- **Print mode is removed in a `finally` block** so a thrown capture (network error fetching an image, html2canvas chokes on a malformed style, jsPDF runs out of memory on a giant section) can't leave the live dashboard repainted in light theme. The attribute toggle is symmetric: set at the top of `exportFullReportToPdf`, cleared in finally.
-- **No metrics, API, or component-logic changes.** The numbers on the cover come from the same `latest` payload the dashboard renders, so they match the on-screen executive summary card by card. Per user preference: data is real, not modeled — the KPI values are arithmetic on `latest.brands`, `latest.total_keywords`, and `latest.total_aios_triggered`, the same fields the live `StoryPanel` reads.
+- **`app/api/projects/[id]/refresh/route.ts`** — accepts optional `{ snapshotId?, kwOffset?, kwLimit? }` in the POST body. First chunk (no `snapshotId`) creates the snapshot with the full universe total so the progress denominator is correct immediately. Intermediate chunks skip `finalizeSnapshot`. Last chunk queries `snapshotProgress` for the DB-authoritative cumulative AIO count, then finalizes. Backwards-compatible: a body-less POST (pre-v1.1.63 clients or direct API calls) still works exactly as before.
+- **`components/Dashboard.tsx`** — `onRefresh()` replaced single fetch with a `for` loop (`CHUNK_SIZE = 50`). Passes `{ kwOffset, kwLimit, snapshotId? }` per call. Accumulates `totalFailed` across chunks; reads `total_aios` from the last chunk's response (DB count) for the success banner.
+- **`lib/db.ts`** — added `getSnapshot(id)` to fetch a snapshot row by ID. Used by the refresh route to validate and reuse an existing in-progress snapshot on chunks 2+.
 
 ### Not changed
-- **CSV/keyword drilldown PDF export (`exportDrilldownToCsv` / `exportDrilldownToPdf`) is unchanged.** Only the full-report export was rebuilt — the keyword-level table exports already use a clean landscape table layout that prints fine.
-- **`PptPromptBuilder` is unchanged.** Copy PPT Prompt still emits the same dual-slide narrative prompt; only the file-format export changed.
+- Database schema unchanged — no migration needed.
+- `/refresh/progress` polling unchanged — it works correctly during chunked runs because it counts `serp_results` rows, not snapshot status.
+- SerpAPI client, concurrency, and per-keyword timeout unchanged from v1.1.62.
+
+### Notes
+- `CHUNK_SIZE = 50` means a 398-keyword universe makes 8 calls (~19 s each). Adjust in `Dashboard.tsx` if needed — lower for Hobby (60 s limit → max ~25 keywords/chunk), higher for very fast SerpAPI response times.
+- If a chunk call fails mid-run, the snapshot stays in `running` state and is auto-failed by the zombie-detection logic in /refresh/progress after 10 minutes. Clicking Refresh again starts a fresh snapshot.
+
+## [1.1.62] — 2026-05-29
+
+Refresh 504 fix for large keyword universes. With 389 keywords at CONCURRENCY=4, the refresh pool needed ~97 sequential rounds at ~3 s average per SerpAPI call — right at the 300 s Pro ceiling, and over it whenever a keyword triggered an async `page_token` follow-up (a second HTTP round-trip). The fix doubles concurrency and adds a per-keyword hard timeout so a single slow call can't pin a pool slot for the duration of the function.
+
+### Changed
+- **`app/api/projects/[id]/refresh/route.ts`** — `CONCURRENCY` raised from 4 → 8, cutting wall-clock time roughly in half (389-kw run now finishes in ≈ 145 s on average, well inside the 300 s Pro limit). Added `KW_TIMEOUT_MS = 15_000`: each keyword is now passed `timeoutMs` so a hung SerpAPI call is aborted after 15 s and recorded as a failed-stub row rather than silently occupying a pool slot.
+- **`lib/serpapi.ts`** — `SerpFetchOptions` gains an optional `timeoutMs` field. When set, `fetchAio` creates an `AbortSignal.timeout(timeoutMs)` and passes it to both the initial SERP fetch and any async `page_token` follow-up via `getJson`. `getJson` now accepts an optional `signal` parameter, and `resolveAio` threads it through to the follow-up call.
+
+### Not changed
+- No database schema, API contract, or UI changes. The fix is entirely within the refresh worker and its SerpAPI client. Snapshots written before this version are unaffected.
+
+### Notes
+- If you're on Vercel **Hobby** (60 s hard limit), 389 keywords will still time out regardless of concurrency — Hobby's limit is a platform constraint, not a code constraint. The fix targets Vercel **Pro** (300 s). For Hobby installs with large universes the right path is a background-queue architecture (queued for a future version).
+- If you see SerpAPI 429s after this change, lower `CONCURRENCY` to 5–6 in `refresh/route.ts`.
 
 ## [1.1.61] — 2026-05-24
 
